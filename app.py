@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 
+import pandas as pd
 import streamlit as st
 
 from triage_assistant import (
@@ -13,6 +14,34 @@ from triage_assistant import (
 
 
 st.set_page_config(page_title="Email Triage Assistant", layout="wide")
+
+
+TABLE_COLUMNS = [
+    "date",
+    "from_name",
+    "from_email",
+    "subject",
+    "category",
+    "priority",
+    "review_status",
+    "german_reply_draft",
+    "method",
+    "reason",
+]
+
+
+TABLE_COLUMN_CONFIG = {
+    "date": st.column_config.TextColumn("Date", width="small"),
+    "from_name": st.column_config.TextColumn("From name", width="medium"),
+    "from_email": st.column_config.TextColumn("From email", width="medium"),
+    "subject": st.column_config.TextColumn("Subject", width="large"),
+    "category": st.column_config.TextColumn("Category", width="small"),
+    "priority": st.column_config.TextColumn("Priority", width="small"),
+    "review_status": st.column_config.TextColumn("Review status", width="medium"),
+    "german_reply_draft": st.column_config.TextColumn("German Reply Draft", width="large"),
+    "method": st.column_config.TextColumn("Method", width="small"),
+    "reason": st.column_config.TextColumn("Reason", width="large"),
+}
 
 
 def require_password() -> bool:
@@ -34,6 +63,60 @@ def require_password() -> bool:
             st.error("Incorrect password.")
 
     return False
+
+
+def normalize_result_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    normalized = []
+    for row in rows:
+        clean = {column: str(row.get(column, "") or "") for column in TABLE_COLUMNS}
+        normalized.append(clean)
+    return normalized
+
+
+def is_focus_email(row: dict[str, str]) -> bool:
+    priority = row.get("priority", "").lower()
+    category = row.get("category", "").lower()
+    review_status = row.get("review_status", "").lower()
+    return (
+        priority in {"high", "unsure"}
+        or category == "unsure"
+        or review_status == "needs manual review"
+    )
+
+
+def render_email_table(title: str, rows: list[dict[str, str]], key_prefix: str) -> None:
+    st.markdown(f"#### {title}")
+    if not rows:
+        st.info("No emails in this view.")
+        return
+
+    dataframe = pd.DataFrame(rows, columns=TABLE_COLUMNS)
+    st.dataframe(
+        dataframe,
+        use_container_width=True,
+        hide_index=True,
+        column_order=TABLE_COLUMNS,
+        column_config=TABLE_COLUMN_CONFIG,
+    )
+
+    options = []
+    for index, row in enumerate(rows):
+        label = f"{row.get('priority', '')} | {row.get('from_name', '')} | {row.get('subject', '')}"
+        options.append((index, label[:180]))
+
+    selected_index = st.selectbox(
+        "Choose an email to copy/use its German reply draft",
+        options=[option[0] for option in options],
+        format_func=lambda index: dict(options).get(index, ""),
+        key=f"{key_prefix}_draft_select",
+    )
+    selected = rows[selected_index]
+    st.text_area(
+        "German Reply Draft",
+        value=selected.get("german_reply_draft", ""),
+        height=220,
+        key=f"{key_prefix}_draft_text",
+    )
 
 
 if not require_password():
@@ -104,9 +187,41 @@ if st.button("Read Unread Emails and Create Draft Suggestions", type="primary"):
 
 results = st.session_state.get("triage_results", [])
 if results:
-    st.dataframe(results, use_container_width=True, hide_index=True)
+    normalized_results = normalize_result_rows(results)
+    focus_results = [row for row in normalized_results if is_focus_email(row)]
+    low_priority = [row for row in normalized_results if row.get("priority", "").lower() == "low"]
+    archive_candidates = [
+        row for row in normalized_results if row.get("review_status", "").lower() == "archive candidate"
+    ]
+    deletion_review = [
+        row for row in normalized_results if row.get("review_status", "").lower() == "review for deletion"
+    ]
 
-    excel_bytes = create_excel_bytes(results)
+    st.subheader("Action Dashboard")
+    st.caption("Default view focuses on high priority, unsure, and manual-review emails first.")
+
+    focus_tab, all_tab, low_tab, archive_tab, delete_tab = st.tabs(
+        [
+            f"Focus ({len(focus_results)})",
+            f"All ({len(normalized_results)})",
+            f"Low priority ({len(low_priority)})",
+            f"Archive candidates ({len(archive_candidates)})",
+            f"Review for deletion ({len(deletion_review)})",
+        ]
+    )
+
+    with focus_tab:
+        render_email_table("High priority / Unsure / Needs manual review", focus_results, "focus")
+    with all_tab:
+        render_email_table("All unread emails in this run", normalized_results, "all")
+    with low_tab:
+        render_email_table("Low priority", low_priority, "low")
+    with archive_tab:
+        render_email_table("Archive candidates", archive_candidates, "archive")
+    with delete_tab:
+        render_email_table("Review for deletion", deletion_review, "delete")
+
+    excel_bytes = create_excel_bytes(normalized_results)
     st.download_button(
         "Download Excel",
         data=excel_bytes,

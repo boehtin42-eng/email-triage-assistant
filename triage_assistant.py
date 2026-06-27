@@ -5,6 +5,7 @@ import re
 from datetime import date, timedelta
 from email.header import decode_header, make_header
 from email.message import Message
+from email.utils import parsedate_to_datetime, parseaddr
 from io import BytesIO
 from typing import Any, Optional
 
@@ -105,10 +106,23 @@ def _decode_header(value: Optional[str]) -> str:
 
 
 def _extract_sender_address(from_header: str) -> str:
-    match = re.search(r"<([^>]+)>", from_header)
-    if match:
-        return match.group(1).strip()
-    return from_header.strip()
+    _, address = parseaddr(from_header)
+    return address or from_header.strip()
+
+
+def _extract_sender_name(from_header: str) -> str:
+    name, address = parseaddr(from_header)
+    return name or address or from_header.strip()
+
+
+def _short_email_date(date_header: str) -> str:
+    if not date_header:
+        return ""
+    try:
+        parsed = parsedate_to_datetime(date_header)
+        return parsed.strftime("%a, %d %b %Y")
+    except Exception:
+        return date_header
 
 
 def _message_body(message: Message) -> str:
@@ -194,6 +208,7 @@ def fetch_unread_emails(
                 {
                     "message_id": message_id.decode("utf-8", errors="replace"),
                     "from": from_header,
+                    "from_name": _extract_sender_name(from_header),
                     "from_email": _extract_sender_address(from_header),
                     "subject": _decode_header(parsed.get("Subject")),
                     "date": _decode_header(parsed.get("Date")),
@@ -224,7 +239,7 @@ def classify_emails(emails: list[dict[str, str]]) -> list[dict[str, str]]:
             results.append(_gemini_triage(model, item))
         except Exception as exc:
             fallback = _heuristic_triage(item)
-            fallback["processing_note"] = f"Gemini failed, heuristic used: {exc}"
+            fallback["reason"] = f"Gemini failed, heuristic used: {exc}"
             results.append(fallback)
 
     return results
@@ -240,7 +255,10 @@ def _gemini_triage(model: Any, item: dict[str, str]) -> dict[str, str]:
     response = model.generate_content(
         (
             "You triage business emails. Return only valid JSON with these keys: "
-            "category, priority, summary, next_action, german_reply_draft. "
+            "category, priority, review_status, reason, german_reply_draft. "
+            "priority must be one of: High, Normal, Low, Unsure. "
+            "review_status must be one of: Needs manual review, Archive candidate, "
+            "Review for deletion, OK. "
             "Do not claim that an email was sent.\n\n"
             f"Email:\n{json.dumps(prompt, ensure_ascii=False)}"
         ),
@@ -270,10 +288,19 @@ def _heuristic_triage(item: dict[str, str]) -> dict[str, str]:
 
     if any(word in text for word in ["urgent", "asap", "dringend", "sofort"]):
         priority = "High"
+        review_status = "Needs manual review"
     elif any(word in text for word in ["invoice", "rechnung", "payment", "zahlung"]):
-        priority = "Medium"
+        priority = "High"
+        review_status = "Needs manual review"
+    elif any(word in text for word in ["unsubscribe", "newsletter", "sale", "webinar", "digest"]):
+        priority = "Low"
+        review_status = "Archive candidate"
+    elif any(word in text for word in ["noreply", "no-reply", "notification"]):
+        priority = "Low"
+        review_status = "Archive candidate"
     else:
         priority = "Normal"
+        review_status = "OK"
 
     if any(word in text for word in ["invoice", "rechnung", "payment", "zahlung"]):
         category = "Billing"
@@ -287,8 +314,8 @@ def _heuristic_triage(item: dict[str, str]) -> dict[str, str]:
     parsed = {
         "category": category,
         "priority": priority,
-        "summary": item["body"][:300] or item["subject"],
-        "next_action": "Review the email and decide whether a human reply is needed.",
+        "review_status": review_status,
+        "reason": "Heuristic fallback classification.",
         "german_reply_draft": (
             "Guten Tag,\n\nvielen Dank fuer Ihre Nachricht. "
             "Wir pruefen Ihr Anliegen und melden uns zeitnah bei Ihnen.\n\n"
@@ -300,16 +327,16 @@ def _heuristic_triage(item: dict[str, str]) -> dict[str, str]:
 
 def _result_row(item: dict[str, str], parsed: dict[str, Any], method: str) -> dict[str, str]:
     return {
-        "date": item.get("date", ""),
-        "from": item.get("from", ""),
+        "date": _short_email_date(item.get("date", "")),
+        "from_name": item.get("from_name", ""),
         "from_email": item.get("from_email", ""),
         "subject": item.get("subject", ""),
         "category": str(parsed.get("category", "")),
         "priority": str(parsed.get("priority", "")),
-        "summary": str(parsed.get("summary", "")),
-        "next_action": str(parsed.get("next_action", "")),
+        "review_status": str(parsed.get("review_status", "OK")),
         "german_reply_draft": str(parsed.get("german_reply_draft", "")),
         "method": method,
+        "reason": str(parsed.get("reason", "")),
     }
 
 
