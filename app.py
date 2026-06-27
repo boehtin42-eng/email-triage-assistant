@@ -1,7 +1,9 @@
 from datetime import date, timedelta
+import json
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from triage_assistant import (
     classify_emails,
@@ -170,11 +172,52 @@ def render_email_table(title: str, rows: list[dict[str, str]], key_prefix: str) 
         key=f"{key_prefix}_draft_select",
     )
     selected = rows[selected_index]
+    draft = selected.get("german_reply_draft", "")
     st.text_area(
         "German Reply Draft",
-        value=selected.get("german_reply_draft", ""),
+        value=draft,
         height=220,
         key=f"{key_prefix}_draft_text",
+    )
+    render_copy_button(draft, f"{key_prefix}_copy_button")
+
+
+def render_copy_button(text: str, key: str) -> None:
+    safe_text = json.dumps(text)
+    components.html(
+        f"""
+        <button
+            id="{key}"
+            style="
+                background:#ff4b4b;
+                border:0;
+                border-radius:8px;
+                color:white;
+                cursor:pointer;
+                font:600 14px system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+                padding:10px 14px;
+            "
+        >
+            Copy German Draft
+        </button>
+        <span id="{key}-status" style="margin-left:10px;color:#8b949e;font:14px system-ui;"></span>
+        <script>
+            const button = document.getElementById("{key}");
+            const status = document.getElementById("{key}-status");
+            button.addEventListener("click", async () => {{
+                try {{
+                    await navigator.clipboard.writeText({safe_text});
+                    status.textContent = "Copied";
+                }} catch (error) {{
+                    status.textContent = "Copy failed. Select the text manually.";
+                }}
+                setTimeout(() => {{
+                    status.textContent = "";
+                }}, 2500);
+            }});
+        </script>
+        """,
+        height=48,
     )
 
 
