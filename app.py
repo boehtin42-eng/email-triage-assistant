@@ -84,6 +84,65 @@ def is_focus_email(row: dict[str, str]) -> bool:
     )
 
 
+def is_no_reply_email(row: dict[str, str]) -> bool:
+    text = f"{row.get('from_name', '')} {row.get('from_email', '')}".lower()
+    return any(marker in text for marker in ["no-reply", "noreply", "donotreply", "do-not-reply"])
+
+
+def is_newsletter_email(row: dict[str, str]) -> bool:
+    text = " ".join(
+        [
+            row.get("from_name", ""),
+            row.get("from_email", ""),
+            row.get("subject", ""),
+            row.get("category", ""),
+            row.get("reason", ""),
+        ]
+    ).lower()
+    markers = [
+        "newsletter",
+        "digest",
+        "webinar",
+        "promotion",
+        "marketing",
+        "unsubscribe",
+        "sale",
+        "offer",
+        "notification",
+        "linkedin",
+        "manychat",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def matches_search(row: dict[str, str], query: str) -> bool:
+    if not query:
+        return True
+    searchable = " ".join(str(row.get(column, "")) for column in TABLE_COLUMNS).lower()
+    return query.lower() in searchable
+
+
+def apply_quick_filters(
+    rows: list[dict[str, str]],
+    show_high_unsure_only: bool,
+    hide_newsletters: bool,
+    hide_no_reply: bool,
+    search_query: str,
+) -> list[dict[str, str]]:
+    filtered = []
+    for row in rows:
+        if show_high_unsure_only and row.get("priority", "").lower() not in {"high", "unsure"}:
+            continue
+        if hide_newsletters and is_newsletter_email(row):
+            continue
+        if hide_no_reply and is_no_reply_email(row):
+            continue
+        if not matches_search(row, search_query):
+            continue
+        filtered.append(row)
+    return filtered
+
+
 def render_email_table(title: str, rows: list[dict[str, str]], key_prefix: str) -> None:
     st.markdown(f"#### {title}")
     if not rows:
@@ -137,6 +196,14 @@ with st.sidebar:
     st.write("- Does not mark emails as read")
 
     limit = st.number_input("Email limit", min_value=1, max_value=50, value=10, step=1)
+
+    st.header("Quick Filters")
+    show_high_unsure_only = st.checkbox("Show only High / Unsure")
+    hide_newsletters = st.checkbox("Hide newsletters / marketing")
+    hide_no_reply = st.checkbox("Hide no-reply emails")
+    search_query = st.text_input("Search keyword", placeholder="sender, subject, category...")
+
+    st.header("Optional Date Filter")
     use_date_filter = st.checkbox("Filter by date")
     start_date = None
     end_date = None
@@ -188,13 +255,20 @@ if st.button("Read Unread Emails and Create Draft Suggestions", type="primary"):
 results = st.session_state.get("triage_results", [])
 if results:
     normalized_results = normalize_result_rows(results)
-    focus_results = [row for row in normalized_results if is_focus_email(row)]
-    low_priority = [row for row in normalized_results if row.get("priority", "").lower() == "low"]
+    filtered_results = apply_quick_filters(
+        normalized_results,
+        show_high_unsure_only=show_high_unsure_only,
+        hide_newsletters=hide_newsletters,
+        hide_no_reply=hide_no_reply,
+        search_query=search_query,
+    )
+    focus_results = [row for row in filtered_results if is_focus_email(row)]
+    low_priority = [row for row in filtered_results if row.get("priority", "").lower() == "low"]
     archive_candidates = [
-        row for row in normalized_results if row.get("review_status", "").lower() == "archive candidate"
+        row for row in filtered_results if row.get("review_status", "").lower() == "archive candidate"
     ]
     deletion_review = [
-        row for row in normalized_results if row.get("review_status", "").lower() == "review for deletion"
+        row for row in filtered_results if row.get("review_status", "").lower() == "review for deletion"
     ]
 
     st.subheader("Action Dashboard")
@@ -203,7 +277,7 @@ if results:
     focus_tab, all_tab, low_tab, archive_tab, delete_tab = st.tabs(
         [
             f"Focus ({len(focus_results)})",
-            f"All ({len(normalized_results)})",
+            f"All ({len(filtered_results)})",
             f"Low priority ({len(low_priority)})",
             f"Archive candidates ({len(archive_candidates)})",
             f"Review for deletion ({len(deletion_review)})",
@@ -213,7 +287,7 @@ if results:
     with focus_tab:
         render_email_table("High priority / Unsure / Needs manual review", focus_results, "focus")
     with all_tab:
-        render_email_table("All unread emails in this run", normalized_results, "all")
+        render_email_table("All unread emails matching current filters", filtered_results, "all")
     with low_tab:
         render_email_table("Low priority", low_priority, "low")
     with archive_tab:
@@ -221,7 +295,7 @@ if results:
     with delete_tab:
         render_email_table("Review for deletion", deletion_review, "delete")
 
-    excel_bytes = create_excel_bytes(normalized_results)
+    excel_bytes = create_excel_bytes(filtered_results)
     st.download_button(
         "Download Excel",
         data=excel_bytes,
