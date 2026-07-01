@@ -106,6 +106,37 @@ def generate_reply(
     return (response.text or "").strip()
 
 
+def translate_to_burmese(text: str) -> str:
+    if not text.strip():
+        return ""
+
+    cache = st.session_state.setdefault("translation_cache", {})
+    cache_key = text.strip()
+    if cache_key in cache:
+        return cache[cache_key]
+
+    api_key = get_secret("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is missing from Streamlit Secrets or environment variables.")
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(MODEL_NAME)
+    response = model.generate_content(
+        (
+            "Translate the following text into Burmese/Myanmar accurately and naturally. "
+            "Preserve the exact meaning. Do not add explanations, labels, or extra notes.\n\n"
+            f"Text:\n{text.strip()}"
+        ),
+        generation_config={
+            "temperature": 0.1,
+            "max_output_tokens": 700,
+        },
+    )
+    translation = (response.text or "").strip()
+    cache[cache_key] = translation
+    return translation
+
+
 def render_copy_button(text: str, key: str) -> None:
     safe_text = json.dumps(text)
     components.html(
@@ -180,6 +211,20 @@ incoming_message = st.text_area(
     placeholder="Paste the message you received here...",
 )
 
+if incoming_message.strip():
+    st.subheader("မြန်မာဘာသာပြန်")
+    try:
+        with st.spinner("Translating incoming message to Burmese..."):
+            incoming_translation = translate_to_burmese(incoming_message)
+        st.text_area(
+            "Incoming message Burmese translation",
+            value=incoming_translation,
+            height=140,
+            key="incoming_burmese_translation",
+        )
+    except Exception as exc:
+        st.warning(f"Could not translate incoming message: {exc}")
+
 extra_context = st.text_area(
     "Extra context (optional)",
     height=100,
@@ -223,5 +268,18 @@ if reply_draft:
     st.subheader("Reply Draft")
     st.text_area("Edit before copying", value=reply_draft, height=220, key="reply_draft_editor")
     render_copy_button(st.session_state.get("reply_draft_editor", reply_draft), "copy_reply")
+
+    st.subheader("Reply Draft မြန်မာဘာသာပြန်")
+    try:
+        with st.spinner("Translating reply draft to Burmese..."):
+            reply_translation = translate_to_burmese(st.session_state.get("reply_draft_editor", reply_draft))
+        st.text_area(
+            "Reply draft Burmese translation",
+            value=reply_translation,
+            height=180,
+            key="reply_burmese_translation",
+        )
+    except Exception as exc:
+        st.warning(f"Could not translate reply draft: {exc}")
 
     st.info("After copying, paste the reply into Facebook Messenger, WhatsApp, or Instagram and send manually.")
