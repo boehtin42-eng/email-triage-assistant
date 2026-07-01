@@ -111,7 +111,7 @@ def translate_to_burmese(text: str) -> str:
         return ""
 
     cache = st.session_state.setdefault("translation_cache", {})
-    cache_key = text.strip()
+    cache_key = f"v2:{text.strip()}"
     if cache_key in cache:
         return cache[cache_key]
 
@@ -123,13 +123,20 @@ def translate_to_burmese(text: str) -> str:
     model = genai.GenerativeModel(MODEL_NAME)
     response = model.generate_content(
         (
-            "Translate the following text into Burmese/Myanmar accurately and naturally. "
-            "Preserve the exact meaning. Do not add explanations, labels, or extra notes.\n\n"
+            "Translate the entire text below into Burmese/Myanmar accurately and naturally.\n"
+            "Important rules:\n"
+            "- Translate every sentence and every line.\n"
+            "- Do not summarize.\n"
+            "- Do not shorten.\n"
+            "- Do not skip any part of the message.\n"
+            "- Keep product names, platform names, company names, and model names in English.\n"
+            "- Preserve the exact meaning and order of the original text.\n"
+            "- Return only the Burmese translation. Do not add explanations, labels, or notes.\n\n"
             f"Text:\n{text.strip()}"
         ),
         generation_config={
             "temperature": 0.1,
-            "max_output_tokens": 700,
+            "max_output_tokens": 2000,
         },
     )
     translation = (response.text or "").strip()
