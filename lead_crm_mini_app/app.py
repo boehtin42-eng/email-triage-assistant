@@ -1,11 +1,14 @@
+import json
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 from uuid import uuid4
 
+import gspread
 import pandas as pd
 import streamlit as st
+from google.oauth2.service_account import Credentials
 
 
 DATA_DIR = Path("data")
@@ -39,9 +42,49 @@ DISPLAY_COLUMNS = [
     "notes",
 ]
 UPDATE_COLUMNS = [column for column in LEAD_COLUMNS if column != "id"]
+GOOGLE_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
 st.set_page_config(page_title="Lead CRM Mini App", layout="wide")
+
+
+def get_secret(name: str) -> Optional[str]:
+    try:
+        value = st.secrets.get(name)
+    except Exception:
+        return None
+    return str(value) if value else None
+
+
+def google_sheets_enabled() -> bool:
+    return bool(get_secret("GOOGLE_SHEET_ID") and get_secret("GOOGLE_SERVICE_ACCOUNT_JSON"))
+
+
+@st.cache_resource
+def get_google_worksheet():
+    sheet_id = get_secret("GOOGLE_SHEET_ID")
+    service_account_json = get_secret("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if not sheet_id or not service_account_json:
+        raise RuntimeError("Google Sheets secrets are missing.")
+
+    service_account_info = json.loads(service_account_json)
+    credentials = Credentials.from_service_account_info(
+        service_account_info,
+        scopes=GOOGLE_SCOPES,
+    )
+    client = gspread.authorize(credentials)
+    spreadsheet = client.open_by_key(sheet_id)
+
+    try:
+        worksheet = spreadsheet.worksheet("Leads")
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title="Leads", rows=1000, cols=len(LEAD_COLUMNS))
+
+    first_row = worksheet.row_values(1)
+    if first_row != LEAD_COLUMNS:
+        worksheet.clear()
+        worksheet.append_row(LEAD_COLUMNS)
+    return worksheet
 
 
 def ensure_data_file() -> None:
@@ -51,6 +94,18 @@ def ensure_data_file() -> None:
 
 
 def load_leads() -> pd.DataFrame:
+    if google_sheets_enabled():
+        worksheet = get_google_worksheet()
+        rows = worksheet.get_all_records()
+        dataframe = pd.DataFrame(rows, dtype=str)
+        if dataframe.empty:
+            dataframe = pd.DataFrame(columns=LEAD_COLUMNS)
+        dataframe = dataframe.fillna("")
+        for column in LEAD_COLUMNS:
+            if column not in dataframe.columns:
+                dataframe[column] = ""
+        return dataframe[LEAD_COLUMNS]
+
     ensure_data_file()
     dataframe = pd.read_csv(DATA_FILE, dtype=str).fillna("")
     for column in LEAD_COLUMNS:
@@ -60,12 +115,21 @@ def load_leads() -> pd.DataFrame:
 
 
 def save_leads(dataframe: pd.DataFrame) -> None:
-    ensure_data_file()
     dataframe = dataframe.copy()
     for column in LEAD_COLUMNS:
         if column not in dataframe.columns:
             dataframe[column] = ""
-    dataframe[LEAD_COLUMNS].to_csv(DATA_FILE, index=False)
+
+    dataframe = dataframe[LEAD_COLUMNS].fillna("")
+    if google_sheets_enabled():
+        worksheet = get_google_worksheet()
+        worksheet.clear()
+        values = [LEAD_COLUMNS] + dataframe.values.tolist()
+        worksheet.update(values)
+        return
+
+    ensure_data_file()
+    dataframe.to_csv(DATA_FILE, index=False)
 
 
 def add_lead(lead: Dict[str, str]) -> None:
