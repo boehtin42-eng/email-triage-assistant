@@ -41,6 +41,17 @@ DISPLAY_COLUMNS = [
     "next_action",
     "notes",
 ]
+ACTION_COLUMNS = [
+    "name",
+    "phone",
+    "email",
+    "source",
+    "interest",
+    "status",
+    "follow_up_date",
+    "next_action",
+    "notes",
+]
 UPDATE_COLUMNS = [column for column in LEAD_COLUMNS if column != "id"]
 GOOGLE_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -244,6 +255,41 @@ def render_metrics(dataframe: pd.DataFrame) -> None:
     col5.metric("Won", int((dataframe["status"] == "Won").sum()) if not dataframe.empty else 0)
 
 
+def leads_for_bucket(dataframe: pd.DataFrame, bucket: str) -> pd.DataFrame:
+    if dataframe.empty:
+        return dataframe
+    buckets = dataframe.apply(lead_bucket, axis=1)
+    return dataframe[buckets == bucket]
+
+
+def sort_action_leads(dataframe: pd.DataFrame) -> pd.DataFrame:
+    if dataframe.empty:
+        return dataframe
+    sorted_frame = dataframe.copy()
+    sorted_frame["_follow_up_sort"] = pd.to_datetime(
+        sorted_frame["follow_up_date"],
+        errors="coerce",
+    )
+    sorted_frame = sorted_frame.sort_values(
+        by=["_follow_up_sort", "created_at"],
+        ascending=[True, False],
+        na_position="last",
+    )
+    return sorted_frame.drop(columns=["_follow_up_sort"])
+
+
+def render_action_table(title: str, dataframe: pd.DataFrame, empty_message: str) -> None:
+    st.subheader(title)
+    if dataframe.empty:
+        st.info(empty_message)
+        return
+    st.dataframe(
+        sort_action_leads(dataframe)[ACTION_COLUMNS],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
 def render_add_lead_form() -> None:
     with st.form("add_lead_form", clear_on_submit=True):
         st.subheader("Add Lead")
@@ -285,7 +331,7 @@ def render_add_lead_form() -> None:
 
 
 def render_editable_table(dataframe: pd.DataFrame) -> pd.DataFrame:
-    st.subheader("Lead Table")
+    st.subheader("Editable Lead Table")
     if dataframe.empty:
         st.info("No leads found.")
         return dataframe
@@ -359,16 +405,54 @@ with tab_add:
 
 with tab_dashboard:
     filtered = apply_filters(leads, search_query, status_filter, source_filter, follow_up_view)
-    due_today = filtered[filtered.apply(lead_bucket, axis=1) == "Due today"] if not filtered.empty else filtered
-    overdue = filtered[filtered.apply(lead_bucket, axis=1) == "Overdue"] if not filtered.empty else filtered
+    due_today = leads_for_bucket(filtered, "Due today")
+    overdue = leads_for_bucket(filtered, "Overdue")
+    new_leads = leads_for_bucket(filtered, "New")
+    active_leads = leads_for_bucket(filtered, "Active")
 
     if not overdue.empty:
-        st.error(f"{len(overdue)} overdue follow-up(s).")
-        st.dataframe(overdue[DISPLAY_COLUMNS], use_container_width=True, hide_index=True)
-
+        st.error(f"{len(overdue)} overdue follow-up(s). Handle these first.")
     if not due_today.empty:
         st.warning(f"{len(due_today)} follow-up(s) due today.")
-        st.dataframe(due_today[DISPLAY_COLUMNS], use_container_width=True, hide_index=True)
+
+    action_today, action_overdue, action_new, action_active, action_all = st.tabs(
+        ["Today follow-ups", "Overdue", "New leads", "Active", "All leads"]
+    )
+
+    with action_today:
+        render_action_table(
+            "Today follow-ups",
+            due_today,
+            "No follow-ups due today.",
+        )
+
+    with action_overdue:
+        render_action_table(
+            "Overdue follow-ups",
+            overdue,
+            "No overdue follow-ups.",
+        )
+
+    with action_new:
+        render_action_table(
+            "New leads",
+            new_leads,
+            "No new leads.",
+        )
+
+    with action_active:
+        render_action_table(
+            "Active leads",
+            active_leads,
+            "No active leads.",
+        )
+
+    with action_all:
+        render_action_table(
+            "All filtered leads",
+            filtered,
+            "No leads match the current filters.",
+        )
 
     edited_table = render_editable_table(filtered)
     if st.button("Save table changes", type="primary"):
