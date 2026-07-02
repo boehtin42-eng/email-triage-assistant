@@ -37,7 +37,7 @@ For Google Sheets storage, add Streamlit secrets:
 
 ```toml
 GOOGLE_SHEET_ID = "your-google-sheet-id"
-GOOGLE_SERVICE_ACCOUNT_JSON = """
+GOOGLE_SERVICE_ACCOUNT_JSON = '''
 {
   "type": "service_account",
   "project_id": "your-project-id",
@@ -50,10 +50,13 @@ GOOGLE_SERVICE_ACCOUNT_JSON = """
   "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
   "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/..."
 }
-"""
+'''
 ```
 
 Share the Google Sheet with the service account `client_email` as Editor.
+
+Use triple single quotes (`'''`) for `GOOGLE_SERVICE_ACCOUNT_JSON`. Triple double quotes can turn `\n`
+inside `private_key` into real line breaks and make the JSON invalid.
 
 ## Storage note
 

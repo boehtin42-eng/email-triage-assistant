@@ -73,7 +73,7 @@ def get_service_account_info() -> Dict[str, str]:
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             "GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON. Paste the full service account JSON "
-            "inside triple quotes in Streamlit Secrets, and keep all quotes, commas, braces, and "
+            "inside triple single quotes in Streamlit Secrets, and keep all quotes, commas, braces, and "
             "\\n characters in the private_key exactly as Google provides them."
         ) from exc
 
