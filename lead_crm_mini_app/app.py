@@ -94,7 +94,19 @@ def get_google_worksheet():
         scopes=GOOGLE_SCOPES,
     )
     client = gspread.authorize(credentials)
-    spreadsheet = client.open_by_key(sheet_id)
+    try:
+        spreadsheet = client.open_by_key(sheet_id)
+    except gspread.SpreadsheetNotFound as exc:
+        raise RuntimeError(
+            "Google Sheet was not found or is not shared with the service account. "
+            "Check GOOGLE_SHEET_ID, then share the Google Sheet with the service account "
+            "client_email as Editor."
+        ) from exc
+    except gspread.exceptions.APIError as exc:
+        raise RuntimeError(
+            "Google Sheets API could not open the spreadsheet. Check that Google Sheets API is "
+            "enabled, GOOGLE_SHEET_ID is correct, and the service account has Editor access."
+        ) from exc
 
     try:
         worksheet = spreadsheet.worksheet("Leads")
