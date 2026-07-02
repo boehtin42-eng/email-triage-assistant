@@ -2,7 +2,7 @@ import json
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping, Optional
 from uuid import uuid4
 
 import gspread
@@ -56,6 +56,28 @@ def get_secret(name: str) -> Optional[str]:
     return str(value) if value else None
 
 
+def get_service_account_info() -> Dict[str, str]:
+    try:
+        raw_value = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    except Exception as exc:
+        raise RuntimeError("Could not read GOOGLE_SERVICE_ACCOUNT_JSON from Streamlit Secrets.") from exc
+
+    if not raw_value:
+        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is missing from Streamlit Secrets.")
+
+    if isinstance(raw_value, Mapping):
+        return dict(raw_value)
+
+    try:
+        return json.loads(str(raw_value))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON. Paste the full service account JSON "
+            "inside triple quotes in Streamlit Secrets, and keep all quotes, commas, braces, and "
+            "\\n characters in the private_key exactly as Google provides them."
+        ) from exc
+
+
 def google_sheets_enabled() -> bool:
     return bool(get_secret("GOOGLE_SHEET_ID") and get_secret("GOOGLE_SERVICE_ACCOUNT_JSON"))
 
@@ -63,11 +85,10 @@ def google_sheets_enabled() -> bool:
 @st.cache_resource
 def get_google_worksheet():
     sheet_id = get_secret("GOOGLE_SHEET_ID")
-    service_account_json = get_secret("GOOGLE_SERVICE_ACCOUNT_JSON")
-    if not sheet_id or not service_account_json:
+    if not sheet_id or not get_secret("GOOGLE_SERVICE_ACCOUNT_JSON"):
         raise RuntimeError("Google Sheets secrets are missing.")
 
-    service_account_info = json.loads(service_account_json)
+    service_account_info = get_service_account_info()
     credentials = Credentials.from_service_account_info(
         service_account_info,
         scopes=GOOGLE_SCOPES,
@@ -283,7 +304,15 @@ def render_editable_table(dataframe: pd.DataFrame) -> pd.DataFrame:
 st.title("Lead CRM Mini App")
 st.caption("Track leads, follow-ups, next actions, notes, and export to Excel.")
 
-leads = load_leads()
+try:
+    leads = load_leads()
+except RuntimeError as exc:
+    st.error(str(exc))
+    st.info(
+        "Open Streamlit Cloud Secrets and fix GOOGLE_SHEET_ID / GOOGLE_SERVICE_ACCOUNT_JSON. "
+        "Do not paste the service account JSON into chat."
+    )
+    st.stop()
 render_metrics(leads)
 
 with st.sidebar:
