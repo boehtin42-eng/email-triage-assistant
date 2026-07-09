@@ -1,9 +1,11 @@
 import io
+import html
 import re
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from docx import Document
 from pypdf import PdfReader
 
@@ -33,6 +35,9 @@ ANSWER_LANGUAGES = {
 
 
 st.set_page_config(page_title="Knowledge Base Chatbot", layout="wide")
+
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
 
 def get_secret(name: str) -> Optional[str]:
@@ -116,6 +121,32 @@ def chunk_text(source: str, text: str) -> List[Dict[str, str]]:
     return chunks
 
 
+def render_copy_button(text: str, button_label: str = "Copy answer") -> None:
+    escaped_text = html.escape(text)
+    escaped_label = html.escape(button_label)
+    components.html(
+        f"""
+        <button
+            onclick="navigator.clipboard.writeText(document.getElementById('copy-text').innerText);
+                     this.innerText='Copied';"
+            style="
+                background:#ff4b4b;
+                color:white;
+                border:none;
+                border-radius:6px;
+                padding:0.55rem 0.8rem;
+                font-weight:600;
+                cursor:pointer;
+            "
+        >
+            {escaped_label}
+        </button>
+        <pre id="copy-text" style="display:none;">{escaped_text}</pre>
+        """,
+        height=48,
+    )
+
+
 def tokenize(text: str) -> List[str]:
     return re.findall(r"[\w]+", text.lower())
 
@@ -190,6 +221,41 @@ def render_source_chunks(chunks: List[Dict[str, str]]) -> None:
             st.write(chunk["text"])
 
 
+def render_uploaded_docs_summary(uploaded_files, chunks: List[Dict[str, str]]) -> None:
+    st.subheader("Uploaded documents")
+    chunk_counts: Dict[str, int] = {}
+    for chunk in chunks:
+        chunk_counts[chunk["source"]] = chunk_counts.get(chunk["source"], 0) + 1
+
+    rows = []
+    for uploaded_file in uploaded_files:
+        rows.append(
+            {
+                "File": uploaded_file.name,
+                "Size KB": round(len(uploaded_file.getvalue()) / 1024, 1),
+                "Chunks": chunk_counts.get(uploaded_file.name, 0),
+            }
+        )
+
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def render_chat_history() -> None:
+    if not st.session_state.chat_history:
+        return
+
+    st.subheader("Chat history")
+    if st.button("Clear chat history"):
+        st.session_state.chat_history = []
+        st.rerun()
+
+    for index, item in enumerate(reversed(st.session_state.chat_history), start=1):
+        with st.expander(f"{index}. {item['question']}"):
+            st.caption(f"Language: {item['language']} | Sources: {', '.join(item['sources'])}")
+            st.write(item["answer"])
+            render_copy_button(item["answer"], "Copy this answer")
+
+
 st.title("Internal Knowledge Base Chatbot")
 st.caption("Upload company docs, ask questions, and get answers grounded in the uploaded files.")
 
@@ -227,6 +293,7 @@ if not all_chunks:
     st.stop()
 
 st.success(f"Loaded {len(uploaded_files)} file(s) and created {len(all_chunks)} searchable text chunk(s).")
+render_uploaded_docs_summary(uploaded_files, all_chunks)
 
 question = st.text_input(
     "Ask a question",
@@ -249,8 +316,19 @@ if st.button("Ask", type="primary"):
     st.subheader("Answer")
     if answer:
         st.write(answer)
+        render_copy_button(answer)
+        st.session_state.chat_history.append(
+            {
+                "question": question.strip(),
+                "answer": answer,
+                "language": answer_language,
+                "sources": sorted({chunk["source"] for chunk in relevant_chunks}),
+            }
+        )
     else:
         st.warning(answer_error)
         st.info("The app is showing the most relevant source snippets instead.")
 
     render_source_chunks(relevant_chunks)
+
+render_chat_history()
