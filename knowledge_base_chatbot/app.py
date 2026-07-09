@@ -147,15 +147,19 @@ Company document context:
 """.strip()
 
 
-def answer_with_gemini(question: str, relevant_chunks: List[Dict[str, str]]) -> str:
+def answer_with_gemini(question: str, relevant_chunks: List[Dict[str, str]]) -> Tuple[str, str]:
     api_key = get_secret("GEMINI_API_KEY")
     if not api_key or genai is None:
-        return ""
+        return "", "No Gemini API key found."
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    response = model.generate_content(build_prompt(question, relevant_chunks))
-    return (response.text or "").strip()
+    model_name = get_secret("GEMINI_MODEL") or "gemini-2.5-flash"
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(build_prompt(question, relevant_chunks))
+        return (response.text or "").strip(), ""
+    except Exception as exc:
+        return "", f"Gemini answer generation failed: {exc}"
 
 
 def render_source_chunks(chunks: List[Dict[str, str]]) -> None:
@@ -214,15 +218,13 @@ if st.button("Ask", type="primary"):
         st.stop()
 
     with st.spinner("Searching documents and preparing answer..."):
-        answer = answer_with_gemini(question, relevant_chunks)
+        answer, answer_error = answer_with_gemini(question, relevant_chunks)
 
     st.subheader("Answer")
     if answer:
         st.write(answer)
     else:
-        st.info(
-            "No Gemini API key found, so the app is showing the most relevant source snippets. "
-            "Add GEMINI_API_KEY in Streamlit Secrets to generate a direct answer."
-        )
+        st.warning(answer_error)
+        st.info("The app is showing the most relevant source snippets instead.")
 
     render_source_chunks(relevant_chunks)

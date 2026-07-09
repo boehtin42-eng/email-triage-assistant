@@ -30,6 +30,7 @@ Optional secret:
 
 ```toml
 GEMINI_API_KEY = "your-gemini-api-key"
+GEMINI_MODEL = "gemini-2.5-flash"
 ```
 
 If `GEMINI_API_KEY` is missing, the app still works as a document search tool and shows relevant source snippets.
