@@ -16,6 +16,20 @@ except ImportError:
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 200
 MAX_CONTEXT_CHUNKS = 5
+ANSWER_LANGUAGES = {
+    "Burmese": {
+        "instruction": "Always answer in Burmese/Myanmar language.",
+        "audience": "Burmese-speaking staff member",
+    },
+    "English": {
+        "instruction": "Always answer in clear English.",
+        "audience": "English-speaking staff member",
+    },
+    "German": {
+        "instruction": "Always answer in clear German.",
+        "audience": "German-speaking staff member",
+    },
+}
 
 
 st.set_page_config(page_title="Knowledge Base Chatbot", layout="wide")
@@ -128,16 +142,17 @@ def find_relevant_chunks(question: str, chunks: List[Dict[str, str]]) -> List[Di
     return [chunk for _, chunk in scored[:MAX_CONTEXT_CHUNKS]]
 
 
-def build_prompt(question: str, relevant_chunks: List[Dict[str, str]]) -> str:
+def build_prompt(question: str, relevant_chunks: List[Dict[str, str]], answer_language: str) -> str:
     context = "\n\n".join(
         f"Source: {chunk['source']}\nContent:\n{chunk['text']}" for chunk in relevant_chunks
     )
+    language_config = ANSWER_LANGUAGES[answer_language]
     return f"""
 You are a company knowledge base assistant.
 Answer only from the provided company documents.
 If the documents do not contain the answer, say that the answer is not available in the uploaded documents.
-Always answer in Burmese/Myanmar language.
-Keep the answer clear, short, and practical for a Burmese-speaking staff member.
+{language_config["instruction"]}
+Keep the answer clear, short, and practical for a {language_config["audience"]}.
 Mention the source file names used.
 Keep product names, company names, prices, dates, and source file names exactly as written in the documents.
 
@@ -149,7 +164,11 @@ Company document context:
 """.strip()
 
 
-def answer_with_gemini(question: str, relevant_chunks: List[Dict[str, str]]) -> Tuple[str, str]:
+def answer_with_gemini(
+    question: str,
+    relevant_chunks: List[Dict[str, str]],
+    answer_language: str,
+) -> Tuple[str, str]:
     api_key = get_secret("GEMINI_API_KEY")
     if not api_key or genai is None:
         return "", "No Gemini API key found."
@@ -158,7 +177,7 @@ def answer_with_gemini(question: str, relevant_chunks: List[Dict[str, str]]) -> 
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
-        response = model.generate_content(build_prompt(question, relevant_chunks))
+        response = model.generate_content(build_prompt(question, relevant_chunks, answer_language))
         return (response.text or "").strip(), ""
     except Exception as exc:
         return "", f"Gemini answer generation failed: {exc}"
@@ -180,6 +199,11 @@ with st.sidebar:
         "PDF, DOCX, TXT, MD, CSV, XLSX",
         type=["pdf", "docx", "txt", "md", "csv", "xlsx", "xls"],
         accept_multiple_files=True,
+    )
+    answer_language = st.selectbox(
+        "Answer language",
+        list(ANSWER_LANGUAGES.keys()),
+        index=0,
     )
     st.info("The app does not train a model. It searches the uploaded docs during this session.")
 
@@ -220,7 +244,7 @@ if st.button("Ask", type="primary"):
         st.stop()
 
     with st.spinner("Searching documents and preparing answer..."):
-        answer, answer_error = answer_with_gemini(question, relevant_chunks)
+        answer, answer_error = answer_with_gemini(question, relevant_chunks, answer_language)
 
     st.subheader("Answer")
     if answer:
