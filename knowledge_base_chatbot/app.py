@@ -1,13 +1,23 @@
 import io
 import html
+import json
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 from docx import Document
 from pypdf import PdfReader
+
+try:
+    from google.oauth2.service_account import Credentials
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload
+except ImportError:
+    Credentials = None
+    build = None
+    MediaIoBaseDownload = None
 
 try:
     import google.generativeai as genai
@@ -18,6 +28,12 @@ except ImportError:
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 200
 MAX_CONTEXT_CHUNKS = 5
+GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+GOOGLE_NATIVE_MIME_TYPES = {
+    "application/vnd.google-apps.document",
+    "application/vnd.google-apps.spreadsheet",
+    "application/vnd.google-apps.presentation",
+}
 ANSWER_LANGUAGES = {
     "Burmese": {
         "instruction": "Always answer in Burmese/Myanmar language.",
@@ -46,6 +62,27 @@ def get_secret(name: str) -> Optional[str]:
     except Exception:
         return None
     return str(value) if value else None
+
+
+def get_service_account_info() -> Dict[str, Any]:
+    try:
+        raw_value = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    except Exception as exc:
+        raise RuntimeError("Could not read GOOGLE_SERVICE_ACCOUNT_JSON from Streamlit Secrets.") from exc
+
+    if not raw_value:
+        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is missing from Streamlit Secrets.")
+
+    if isinstance(raw_value, Mapping):
+        return dict(raw_value)
+
+    try:
+        return json.loads(str(raw_value))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON. Use triple single quotes in "
+            "Streamlit Secrets and paste the full service account JSON."
+        ) from exc
 
 
 def clean_text(text: str) -> str:
@@ -90,10 +127,8 @@ def extract_spreadsheet(file, file_name: str) -> str:
     return "\n\n".join(parts)
 
 
-def extract_text(uploaded_file) -> str:
-    file_name = uploaded_file.name
+def extract_text_from_bytes(file_name: str, data: bytes) -> str:
     extension = file_name.lower().rsplit(".", 1)[-1]
-    data = uploaded_file.getvalue()
 
     if extension == "pdf":
         return clean_text(extract_pdf(io.BytesIO(data)))
@@ -105,6 +140,113 @@ def extract_text(uploaded_file) -> str:
         return clean_text(data.decode("utf-8", errors="ignore"))
 
     raise ValueError(f"Unsupported file type: {extension}")
+
+
+def extract_text(uploaded_file) -> str:
+    file_name = uploaded_file.name
+    data = uploaded_file.getvalue()
+    return extract_text_from_bytes(file_name, data)
+
+
+@st.cache_resource
+def get_drive_service():
+    if Credentials is None or build is None:
+        raise RuntimeError("Google Drive dependencies are not installed.")
+
+    credentials = Credentials.from_service_account_info(
+        get_service_account_info(),
+        scopes=GOOGLE_DRIVE_SCOPES,
+    )
+    return build("drive", "v3", credentials=credentials, cache_discovery=False)
+
+
+def download_drive_file(service, file_id: str) -> bytes:
+    request = service.files().get_media(fileId=file_id)
+    buffer = io.BytesIO()
+    downloader = MediaIoBaseDownload(buffer, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    return buffer.getvalue()
+
+
+def export_drive_file(service, file_id: str, mime_type: str) -> Tuple[str, bytes]:
+    if mime_type == "application/vnd.google-apps.document":
+        return ".txt", service.files().export(fileId=file_id, mimeType="text/plain").execute()
+    if mime_type == "application/vnd.google-apps.spreadsheet":
+        data = service.files().export(
+            fileId=file_id,
+            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ).execute()
+        return ".xlsx", data
+    if mime_type == "application/vnd.google-apps.presentation":
+        return ".txt", service.files().export(fileId=file_id, mimeType="text/plain").execute()
+    raise ValueError(f"Unsupported Google native file type: {mime_type}")
+
+
+def load_drive_documents(folder_id: str) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], List[str]]:
+    service = get_drive_service()
+    query = f"'{folder_id}' in parents and trashed = false"
+    response = (
+        service.files()
+        .list(
+            q=query,
+            fields="files(id,name,mimeType,size,modifiedTime)",
+            orderBy="modifiedTime desc",
+            pageSize=50,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        )
+        .execute()
+    )
+
+    chunks: List[Dict[str, str]] = []
+    summaries: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    for file_info in response.get("files", []):
+        file_id = file_info["id"]
+        file_name = file_info["name"]
+        mime_type = file_info.get("mimeType", "")
+        try:
+            if mime_type in GOOGLE_NATIVE_MIME_TYPES:
+                suffix, data = export_drive_file(service, file_id, mime_type)
+                parse_name = f"{file_name}{suffix}"
+            else:
+                data = download_drive_file(service, file_id)
+                parse_name = file_name
+
+            text = extract_text_from_bytes(parse_name, data)
+            file_chunks = chunk_text(file_name, text)
+            chunks.extend(file_chunks)
+            summaries.append(
+                {
+                    "Source": "Google Drive",
+                    "File": file_name,
+                    "Type": "Google native" if mime_type in GOOGLE_NATIVE_MIME_TYPES else parse_name.rsplit(".", 1)[-1].upper(),
+                    "Size KB": round(len(data) / 1024, 1),
+                    "Chunks": len(file_chunks),
+                }
+            )
+        except Exception as exc:
+            errors.append(f"{file_name}: {exc}")
+
+    return chunks, summaries, errors
+
+
+def google_drive_enabled() -> bool:
+    return bool(get_secret("GOOGLE_DRIVE_FOLDER_ID") and get_secret("GOOGLE_SERVICE_ACCOUNT_JSON"))
+
+
+def build_upload_summary(uploaded_file, chunks: List[Dict[str, str]]) -> Dict[str, Any]:
+    file_type = uploaded_file.name.rsplit(".", 1)[-1].upper()
+    return {
+        "Source": "Upload",
+        "File": uploaded_file.name,
+        "Type": file_type,
+        "Size KB": round(len(uploaded_file.getvalue()) / 1024, 1),
+        "Chunks": len(chunks),
+    }
 
 
 def chunk_text(source: str, text: str) -> List[Dict[str, str]]:
@@ -221,23 +363,9 @@ def render_source_chunks(chunks: List[Dict[str, str]]) -> None:
             st.write(chunk["text"])
 
 
-def render_uploaded_docs_summary(uploaded_files, chunks: List[Dict[str, str]]) -> None:
+def render_uploaded_docs_summary(document_summaries: List[Dict[str, Any]]) -> None:
     st.subheader("Uploaded documents")
-    chunk_counts: Dict[str, int] = {}
-    for chunk in chunks:
-        chunk_counts[chunk["source"]] = chunk_counts.get(chunk["source"], 0) + 1
-
-    rows = []
-    for uploaded_file in uploaded_files:
-        rows.append(
-            {
-                "File": uploaded_file.name,
-                "Size KB": round(len(uploaded_file.getvalue()) / 1024, 1),
-                "Chunks": chunk_counts.get(uploaded_file.name, 0),
-            }
-        )
-
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(document_summaries), use_container_width=True, hide_index=True)
 
 
 def render_chat_history() -> None:
@@ -260,12 +388,32 @@ st.title("Internal Knowledge Base Chatbot")
 st.caption("Upload company docs, ask questions, and get answers grounded in the uploaded files.")
 
 with st.sidebar:
-    st.header("Upload Docs")
-    uploaded_files = st.file_uploader(
-        "PDF, DOCX, TXT, MD, CSV, XLSX",
-        type=["pdf", "docx", "txt", "md", "csv", "xlsx", "xls"],
-        accept_multiple_files=True,
+    st.header("Document Source")
+    document_source = st.radio(
+        "Use documents from",
+        ["Upload only", "Google Drive folder", "Upload + Google Drive"],
+        index=0,
     )
+
+    st.header("Upload Docs")
+    uploaded_files = []
+    if document_source in {"Upload only", "Upload + Google Drive"}:
+        uploaded_files = st.file_uploader(
+            "PDF, DOCX, TXT, MD, CSV, XLSX",
+            type=["pdf", "docx", "txt", "md", "csv", "xlsx", "xls"],
+            accept_multiple_files=True,
+        )
+
+    if document_source in {"Google Drive folder", "Upload + Google Drive"}:
+        st.header("Google Drive")
+        if google_drive_enabled():
+            st.success("Google Drive folder secrets found.")
+            if st.button("Refresh Google Drive docs"):
+                get_drive_service.clear()
+                st.rerun()
+        else:
+            st.warning("Add GOOGLE_DRIVE_FOLDER_ID and GOOGLE_SERVICE_ACCOUNT_JSON in Streamlit Secrets.")
+
     answer_language = st.selectbox(
         "Answer language",
         list(ANSWER_LANGUAGES.keys()),
@@ -274,26 +422,40 @@ with st.sidebar:
     st.info("The app does not train a model. It searches the uploaded docs during this session.")
 
 all_chunks: List[Dict[str, str]] = []
+document_summaries: List[Dict[str, Any]] = []
 extraction_errors = []
 
 if uploaded_files:
     for uploaded_file in uploaded_files:
         try:
             text = extract_text(uploaded_file)
-            all_chunks.extend(chunk_text(uploaded_file.name, text))
+            file_chunks = chunk_text(uploaded_file.name, text)
+            all_chunks.extend(file_chunks)
+            document_summaries.append(build_upload_summary(uploaded_file, file_chunks))
         except Exception as exc:
             extraction_errors.append(f"{uploaded_file.name}: {exc}")
+
+if document_source in {"Google Drive folder", "Upload + Google Drive"}:
+    folder_id = get_secret("GOOGLE_DRIVE_FOLDER_ID")
+    if google_drive_enabled() and folder_id:
+        try:
+            drive_chunks, drive_summaries, drive_errors = load_drive_documents(folder_id)
+            all_chunks.extend(drive_chunks)
+            document_summaries.extend(drive_summaries)
+            extraction_errors.extend(drive_errors)
+        except Exception as exc:
+            extraction_errors.append(f"Google Drive: {exc}")
 
 if extraction_errors:
     for error in extraction_errors:
         st.error(error)
 
 if not all_chunks:
-    st.warning("Upload at least one company document to start.")
+    st.warning("Add at least one company document from upload or Google Drive to start.")
     st.stop()
 
-st.success(f"Loaded {len(uploaded_files)} file(s) and created {len(all_chunks)} searchable text chunk(s).")
-render_uploaded_docs_summary(uploaded_files, all_chunks)
+st.success(f"Loaded {len(document_summaries)} file(s) and created {len(all_chunks)} searchable text chunk(s).")
+render_uploaded_docs_summary(document_summaries)
 
 question = st.text_input(
     "Ask a question",
