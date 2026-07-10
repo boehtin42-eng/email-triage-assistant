@@ -2,6 +2,7 @@ import io
 import html
 import json
 import re
+import time
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import pandas as pd
@@ -160,45 +161,81 @@ def get_drive_service():
     return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 
+def is_transient_google_error(error: Exception) -> bool:
+    message = str(error).lower()
+    transient_markers = [
+        "ssl",
+        "record layer failure",
+        "connection reset",
+        "temporarily unavailable",
+        "timeout",
+        "timed out",
+        "rate limit",
+        "backend error",
+    ]
+    return any(marker in message for marker in transient_markers)
+
+
+def execute_google_request(request, label: str, retries: int = 3):
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            return request.execute()
+        except Exception as exc:
+            last_error = exc
+            if attempt == retries or not is_transient_google_error(exc):
+                break
+            time.sleep(attempt)
+
+    raise RuntimeError(f"{label} failed after {retries} attempt(s): {last_error}") from last_error
+
+
 def download_drive_file(service, file_id: str) -> bytes:
     request = service.files().get_media(fileId=file_id)
     buffer = io.BytesIO()
     downloader = MediaIoBaseDownload(buffer, request)
     done = False
+    attempts = 0
     while not done:
-        _, done = downloader.next_chunk()
+        try:
+            _, done = downloader.next_chunk()
+        except Exception as exc:
+            attempts += 1
+            if attempts >= 3 or not is_transient_google_error(exc):
+                raise RuntimeError(f"Google Drive file download failed after 3 attempt(s): {exc}") from exc
+            time.sleep(attempts)
     return buffer.getvalue()
 
 
 def export_drive_file(service, file_id: str, mime_type: str) -> Tuple[str, bytes]:
     if mime_type == "application/vnd.google-apps.document":
-        return ".txt", service.files().export(fileId=file_id, mimeType="text/plain").execute()
+        request = service.files().export(fileId=file_id, mimeType="text/plain")
+        return ".txt", execute_google_request(request, "Google Docs export")
     if mime_type == "application/vnd.google-apps.spreadsheet":
-        data = service.files().export(
+        request = service.files().export(
             fileId=file_id,
             mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ).execute()
+        )
+        data = execute_google_request(request, "Google Sheets export")
         return ".xlsx", data
     if mime_type == "application/vnd.google-apps.presentation":
-        return ".txt", service.files().export(fileId=file_id, mimeType="text/plain").execute()
+        request = service.files().export(fileId=file_id, mimeType="text/plain")
+        return ".txt", execute_google_request(request, "Google Slides export")
     raise ValueError(f"Unsupported Google native file type: {mime_type}")
 
 
 def load_drive_documents(folder_id: str) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], List[str]]:
     service = get_drive_service()
     query = f"'{folder_id}' in parents and trashed = false"
-    response = (
-        service.files()
-        .list(
-            q=query,
-            fields="files(id,name,mimeType,size,modifiedTime)",
-            orderBy="modifiedTime desc",
-            pageSize=50,
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
-        )
-        .execute()
+    request = service.files().list(
+        q=query,
+        fields="files(id,name,mimeType,size,modifiedTime)",
+        orderBy="modifiedTime desc",
+        pageSize=50,
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
     )
+    response = execute_google_request(request, "Google Drive folder list")
 
     chunks: List[Dict[str, str]] = []
     summaries: List[Dict[str, Any]] = []
