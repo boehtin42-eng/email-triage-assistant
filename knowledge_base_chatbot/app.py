@@ -176,7 +176,7 @@ def is_transient_google_error(error: Exception) -> bool:
     return any(marker in message for marker in transient_markers)
 
 
-def execute_google_request(request, label: str, retries: int = 3):
+def execute_google_request(request, label: str, retries: int = 5):
     last_error = None
     for attempt in range(1, retries + 1):
         try:
@@ -185,7 +185,7 @@ def execute_google_request(request, label: str, retries: int = 3):
             last_error = exc
             if attempt == retries or not is_transient_google_error(exc):
                 break
-            time.sleep(attempt)
+            time.sleep(attempt * 2)
 
     raise RuntimeError(f"{label} failed after {retries} attempt(s): {last_error}") from last_error
 
@@ -201,9 +201,9 @@ def download_drive_file(service, file_id: str) -> bytes:
             _, done = downloader.next_chunk()
         except Exception as exc:
             attempts += 1
-            if attempts >= 3 or not is_transient_google_error(exc):
-                raise RuntimeError(f"Google Drive file download failed after 3 attempt(s): {exc}") from exc
-            time.sleep(attempts)
+            if attempts >= 5 or not is_transient_google_error(exc):
+                raise RuntimeError(f"Google Drive file download failed after 5 attempt(s): {exc}") from exc
+            time.sleep(attempts * 2)
     return buffer.getvalue()
 
 
@@ -224,6 +224,7 @@ def export_drive_file(service, file_id: str, mime_type: str) -> Tuple[str, bytes
     raise ValueError(f"Unsupported Google native file type: {mime_type}")
 
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_drive_documents(folder_id: str) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], List[str]]:
     service = get_drive_service()
     query = f"'{folder_id}' in parents and trashed = false"
@@ -447,6 +448,7 @@ with st.sidebar:
             st.success("Google Drive folder secrets found.")
             if st.button("Refresh Google Drive docs"):
                 get_drive_service.clear()
+                load_drive_documents.clear()
                 st.rerun()
         else:
             st.warning("Add GOOGLE_DRIVE_FOLDER_ID and GOOGLE_SERVICE_ACCOUNT_JSON in Streamlit Secrets.")
