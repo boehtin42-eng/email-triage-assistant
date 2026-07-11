@@ -1,0 +1,5 @@
+invoice_no,customer_name,customer_email,amount,currency,invoice_date,due_date,status,last_reminder_date,notes
+INV-1001,Maria Keller,maria@example.com,850,EUR,2026-07-01,2026-07-11,Unpaid,,Monthly cleaning service
+INV-1002,Bright Office GmbH,accounts@example.com,1250,EUR,2026-06-15,2026-07-01,Unpaid,,Overdue test invoice
+INV-1003,Oakar Studio,paid@example.com,420,EUR,2026-07-05,2026-07-10,Paid,,Paid example
+INV-1004,North Project Team,north@example.com,2100,EUR,2026-07-08,2026-07-18,Partially paid,,Upcoming partial payment
