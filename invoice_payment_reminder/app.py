@@ -95,6 +95,10 @@ def save_invoices(dataframe: pd.DataFrame) -> None:
     normalize_columns(dataframe).to_csv(DATA_FILE, index=False)
 
 
+def clear_invoices() -> None:
+    save_invoices(pd.DataFrame(columns=INVOICE_COLUMNS))
+
+
 def parse_date(value: str) -> Optional[date]:
     if not value:
         return None
@@ -376,6 +380,11 @@ with st.sidebar:
     if st.button("Load sample invoices"):
         save_invoices(build_sample_data())
         st.success("Sample invoices loaded.")
+        st.rerun()
+
+    if st.button("Clear all data"):
+        clear_invoices()
+        st.success("All invoice data cleared.")
         st.rerun()
 
     st.header("Filters")
