@@ -116,6 +116,13 @@ def parse_amount(value: str) -> float:
         return 0.0
 
 
+def format_amount(value) -> str:
+    try:
+        return f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "0.00"
+
+
 def payment_state(row: pd.Series) -> str:
     status = str(row.get("status", "")).strip()
     due_date = parse_date(str(row.get("due_date", "")))
@@ -239,7 +246,7 @@ def enrich_invoices(dataframe: pd.DataFrame, tone: str, language: str) -> pd.Dat
     dataframe = normalize_columns(dataframe)
     dataframe["payment_state"] = dataframe.apply(payment_state, axis=1)
     dataframe["days_overdue"] = dataframe.apply(days_overdue, axis=1)
-    dataframe["amount_number"] = dataframe["amount"].apply(parse_amount)
+    dataframe["amount_number"] = pd.to_numeric(dataframe["amount"].apply(parse_amount), errors="coerce").fillna(0.0)
     dataframe["reminder_draft"] = dataframe.apply(lambda row: reminder_draft(row, tone, language), axis=1)
     return dataframe
 
@@ -398,8 +405,8 @@ metric_cols = st.columns(5)
 metric_cols[0].metric("Total invoices", len(enriched))
 metric_cols[1].metric("Overdue", int((enriched["payment_state"] == "Overdue").sum()))
 metric_cols[2].metric("Due today", int((enriched["payment_state"] == "Due today").sum()))
-metric_cols[3].metric("Unpaid amount", f"{total_unpaid:,.2f}")
-metric_cols[4].metric("Overdue amount", f"{overdue_amount:,.2f}")
+metric_cols[3].metric("Unpaid amount", format_amount(total_unpaid))
+metric_cols[4].metric("Overdue amount", format_amount(overdue_amount))
 
 tab_focus, tab_all, tab_add = st.tabs(["Action dashboard", "All invoices", "Add invoice"])
 
