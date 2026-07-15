@@ -209,6 +209,24 @@ def first_match(pattern: str, text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def line_value(labels: List[str], text: str) -> str:
+    labels_pattern = "|".join(re.escape(label) for label in labels)
+    pattern = rf"^\s*(?:{labels_pattern})\s*[:#-]?\s*(.+?)\s*$"
+    match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+    if not match:
+        return ""
+    value = match.group(1).strip()
+    return value.strip(" :#-")
+
+
+def clean_invoice_number(value: str) -> str:
+    value = value.strip()
+    if value.lower() in {"invoice", "invoice no", "invoice number", "rechnung"}:
+        return ""
+    match = re.search(r"\b[A-Z]{2,}-?\d{2,}[A-Z0-9-]*\b|\b\d{4,}\b", value, re.IGNORECASE)
+    return match.group(0).strip() if match else value
+
+
 def detect_currency(text: str) -> str:
     if "€" in text or re.search(r"\bEUR\b", text, re.IGNORECASE):
         return "EUR"
@@ -232,10 +250,23 @@ def guess_vendor(text: str) -> str:
 
 def extract_expense_fields(text: str) -> Dict[str, str]:
     clean = re.sub(r"[ \t]+", " ", text)
-    invoice_no = first_match(r"(?:invoice\s*(?:no|number|#)?|rechnung\s*(?:nr|nummer)?)\s*[:#-]?\s*([A-Z0-9-]+)", clean)
-    invoice_date = first_match(r"(?:invoice date|date|datum)\s*[:#-]?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{2,4})", clean)
-    service = first_match(r"(?:service|description|leistung|item)\s*[:#-]?\s*(.+)", clean)
-    paid_from = first_match(r"(?:paid from|payment method|paid by)\s*[:#-]?\s*(.+)", clean)
+    invoice_no = clean_invoice_number(
+        line_value(["Invoice No", "Invoice Number", "Invoice #", "Rechnung Nr", "Rechnungsnummer"], text)
+    )
+    if not invoice_no:
+        invoice_no = clean_invoice_number(
+            first_match(r"(?:invoice\s*(?:no|number|#)|rechnung\s*(?:nr|nummer))\s*[:#-]?\s*([A-Z0-9-]+)", clean)
+        )
+
+    invoice_date = line_value(["Invoice Date", "Date", "Datum"], text)
+    if not invoice_date:
+        invoice_date = first_match(
+            r"(?:invoice date|date|datum)\s*[:#-]?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{2,4})",
+            clean,
+        )
+
+    service = line_value(["Service", "Description", "Leistung", "Item"], text)
+    paid_from = line_value(["Paid From", "Payment Method", "Paid By"], text)
     amount = parse_invoice_amount(clean)
 
     return {
