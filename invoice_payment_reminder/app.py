@@ -8,7 +8,10 @@ from typing import Dict, List, Optional
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from pdf2image import convert_from_bytes
+from PIL import Image
 from pypdf import PdfReader
+import pytesseract
 
 
 APP_DIR = Path(__file__).parent
@@ -167,12 +170,37 @@ def parse_invoice_amount(value: str) -> str:
     return generic_matches[-1] if generic_matches else ""
 
 
+def run_ocr_on_image(image: Image.Image) -> str:
+    try:
+        return pytesseract.image_to_string(image)
+    except pytesseract.TesseractNotFoundError as exc:
+        raise RuntimeError(
+            "Free OCR engine is not installed yet. On Streamlit Cloud, add packages.txt with tesseract-ocr."
+        ) from exc
+
+
+def run_ocr_on_pdf(data: bytes) -> str:
+    try:
+        pages = convert_from_bytes(data, dpi=200)
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not convert scanned PDF pages for OCR. On Streamlit Cloud, poppler-utils is required."
+        ) from exc
+
+    return "\n\n".join(run_ocr_on_image(page) for page in pages)
+
+
 def extract_text_from_expense_file(uploaded_file) -> str:
     file_name = uploaded_file.name.lower()
     data = uploaded_file.getvalue()
     if file_name.endswith(".pdf"):
         reader = PdfReader(BytesIO(data))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
+        text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+        if text:
+            return text
+        return run_ocr_on_pdf(data)
+    if file_name.endswith((".png", ".jpg", ".jpeg")):
+        return run_ocr_on_image(Image.open(BytesIO(data)))
     return data.decode("utf-8", errors="ignore")
 
 
@@ -635,8 +663,12 @@ with tab_add:
 
 with tab_extract:
     st.subheader("Upload business expense invoice")
-    st.caption("Upload a PDF or TXT invoice. The app extracts likely fields, then you review and save them.")
-    expense_file = st.file_uploader("Expense invoice PDF or TXT", type=["pdf", "txt"], key="expense_invoice_upload")
+    st.caption("Upload a PDF, TXT, or invoice image. The app extracts likely fields, then you review and save them.")
+    expense_file = st.file_uploader(
+        "Expense invoice PDF, TXT, PNG, or JPG",
+        type=["pdf", "txt", "png", "jpg", "jpeg"],
+        key="expense_invoice_upload",
+    )
 
     extracted = {
         "type_of_service": "",

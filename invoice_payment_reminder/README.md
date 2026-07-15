@@ -8,7 +8,7 @@ Small business invoice dashboard for checking unpaid, due today, and overdue inv
 - Track paid, unpaid, partially paid, disputed, and cancelled invoices
 - Detect overdue and due-today invoices
 - Create manual payment reminder drafts
-- Upload a PDF or TXT expense invoice and extract likely expense fields
+- Upload a PDF, TXT, PNG, or JPG expense invoice and extract likely expense fields
 - Save extracted business expenses for review and export
 - Show paid/unpaid dashboard metrics
 - Export action lists to Excel or CSV
@@ -40,3 +40,4 @@ streamlit run invoice_payment_reminder/app.py
 
 The app does not send payment reminders automatically. It only creates drafts for manual review and copy/paste use.
 Expense extraction is a helper, not an accounting approval step. Always review extracted fields before saving.
+Free OCR support uses Tesseract. Text-readable PDFs are usually more accurate than scan/photo invoices.
