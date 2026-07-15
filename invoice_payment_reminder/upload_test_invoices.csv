@@ -1,0 +1,7 @@
+invoice_no,customer_name,customer_email,amount,currency,invoice_date,due_date,status,last_reminder_date,notes
+INV-2001,Anna Schmidt,anna.schmidt@example.com,780,EUR,2026-06-25,2026-07-05,Unpaid,,Overdue invoice for cleaning service
+INV-2002,Berlin Office GmbH,accounting@berlinoffice.example,1450,EUR,2026-07-01,2026-07-12,Unpaid,,Due today test invoice
+INV-2003,Max Weber,max.weber@example.com,320,EUR,2026-07-04,2026-07-20,Unpaid,,Upcoming invoice
+INV-2004,Keller Project Team,finance@kellerproject.example,990,EUR,2026-06-20,2026-07-01,Partially paid,,Partially paid but overdue
+INV-2005,North Studio,hello@northstudio.example,560,EUR,2026-07-02,2026-07-10,Paid,,Paid invoice should not need reminder
+INV-2006,Hamburg Retail,hamburg@example.com,2100,EUR,2026-07-03,,Unpaid,,Missing due date test

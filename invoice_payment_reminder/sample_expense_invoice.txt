@@ -1,0 +1,15 @@
+Digital Tools GmbH
+Musterstrasse 12
+10115 Berlin
+Germany
+
+Invoice No: EXP-3001
+Invoice Date: 2026-07-15
+
+Service: AI workflow automation subscription
+Payment Method: Business bank
+
+Amount Due: 149.00 EUR
+
+Notes:
+Monthly software subscription for business process automation.

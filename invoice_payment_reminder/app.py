@@ -1,4 +1,5 @@
 import html
+import re
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
@@ -7,11 +8,13 @@ from typing import Dict, List, Optional
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from pypdf import PdfReader
 
 
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
 DATA_FILE = DATA_DIR / "invoices.csv"
+EXPENSE_FILE = DATA_DIR / "expenses.csv"
 
 INVOICE_COLUMNS = [
     "invoice_no",
@@ -43,6 +46,17 @@ DISPLAY_COLUMNS = [
 
 STATUSES = ["Unpaid", "Paid", "Partially paid", "Disputed", "Cancelled"]
 CURRENCIES = ["EUR", "USD", "GBP", "THB", "MMK", "Other"]
+EXPENSE_COLUMNS = [
+    "type_of_service",
+    "vendor",
+    "date",
+    "amount",
+    "currency",
+    "paid_from",
+    "invoice",
+    "notes",
+]
+PAID_FROM_OPTIONS = ["Business bank", "Credit card", "PayPal", "Cash", "Personal account", "Other"]
 
 
 st.set_page_config(page_title="Invoice & Payment Reminder Tool", layout="wide")
@@ -52,6 +66,8 @@ def ensure_data_file() -> None:
     DATA_DIR.mkdir(exist_ok=True)
     if not DATA_FILE.exists():
         pd.DataFrame(columns=INVOICE_COLUMNS).to_csv(DATA_FILE, index=False)
+    if not EXPENSE_FILE.exists():
+        pd.DataFrame(columns=EXPENSE_COLUMNS).to_csv(EXPENSE_FILE, index=False)
 
 
 def normalize_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -99,6 +115,28 @@ def clear_invoices() -> None:
     save_invoices(pd.DataFrame(columns=INVOICE_COLUMNS))
 
 
+def load_expenses() -> pd.DataFrame:
+    ensure_data_file()
+    dataframe = pd.read_csv(EXPENSE_FILE, dtype=str).fillna("")
+    for column in EXPENSE_COLUMNS:
+        if column not in dataframe.columns:
+            dataframe[column] = ""
+    return dataframe[EXPENSE_COLUMNS]
+
+
+def save_expenses(dataframe: pd.DataFrame) -> None:
+    ensure_data_file()
+    dataframe = dataframe.copy().fillna("")
+    for column in EXPENSE_COLUMNS:
+        if column not in dataframe.columns:
+            dataframe[column] = ""
+    dataframe[EXPENSE_COLUMNS].to_csv(EXPENSE_FILE, index=False)
+
+
+def clear_expenses() -> None:
+    save_expenses(pd.DataFrame(columns=EXPENSE_COLUMNS))
+
+
 def parse_date(value: str) -> Optional[date]:
     if not value:
         return None
@@ -118,6 +156,70 @@ def parse_amount(value: str) -> float:
         return float(text)
     except ValueError:
         return 0.0
+
+
+def parse_invoice_amount(value: str) -> str:
+    text = str(value).replace(",", "")
+    matches = re.findall(r"(?:total|amount due|betrag|summe|balance)\D{0,20}(\d+(?:\.\d{2})?)", text, re.IGNORECASE)
+    if matches:
+        return matches[-1]
+    generic_matches = re.findall(r"\b\d{1,6}\.\d{2}\b", text)
+    return generic_matches[-1] if generic_matches else ""
+
+
+def extract_text_from_expense_file(uploaded_file) -> str:
+    file_name = uploaded_file.name.lower()
+    data = uploaded_file.getvalue()
+    if file_name.endswith(".pdf"):
+        reader = PdfReader(BytesIO(data))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    return data.decode("utf-8", errors="ignore")
+
+
+def first_match(pattern: str, text: str) -> str:
+    match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+    return match.group(1).strip() if match else ""
+
+
+def detect_currency(text: str) -> str:
+    if "€" in text or re.search(r"\bEUR\b", text, re.IGNORECASE):
+        return "EUR"
+    if "$" in text or re.search(r"\bUSD\b", text, re.IGNORECASE):
+        return "USD"
+    if "£" in text or re.search(r"\bGBP\b", text, re.IGNORECASE):
+        return "GBP"
+    if re.search(r"\bTHB\b", text, re.IGNORECASE):
+        return "THB"
+    return "EUR"
+
+
+def guess_vendor(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    skip_words = ("invoice", "rechnung", "receipt", "tax invoice")
+    for line in lines[:8]:
+        if not any(word in line.lower() for word in skip_words) and len(line) <= 80:
+            return line
+    return lines[0] if lines else ""
+
+
+def extract_expense_fields(text: str) -> Dict[str, str]:
+    clean = re.sub(r"[ \t]+", " ", text)
+    invoice_no = first_match(r"(?:invoice\s*(?:no|number|#)?|rechnung\s*(?:nr|nummer)?)\s*[:#-]?\s*([A-Z0-9-]+)", clean)
+    invoice_date = first_match(r"(?:invoice date|date|datum)\s*[:#-]?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{2,4})", clean)
+    service = first_match(r"(?:service|description|leistung|item)\s*[:#-]?\s*(.+)", clean)
+    paid_from = first_match(r"(?:paid from|payment method|paid by)\s*[:#-]?\s*(.+)", clean)
+    amount = parse_invoice_amount(clean)
+
+    return {
+        "type_of_service": service[:120],
+        "vendor": guess_vendor(clean),
+        "date": invoice_date,
+        "amount": amount,
+        "currency": detect_currency(clean),
+        "paid_from": paid_from[:80],
+        "invoice": invoice_no,
+        "notes": "Extracted from uploaded invoice. Please review before saving.",
+    }
 
 
 def format_amount(value) -> str:
@@ -417,7 +519,9 @@ metric_cols[2].metric("Due today", int((enriched["payment_state"] == "Due today"
 metric_cols[3].metric("Unpaid amount", format_amount(total_unpaid))
 metric_cols[4].metric("Overdue amount", format_amount(overdue_amount))
 
-tab_focus, tab_all, tab_add = st.tabs(["Action dashboard", "All invoices", "Add invoice"])
+tab_focus, tab_all, tab_add, tab_extract, tab_expenses = st.tabs(
+    ["Action dashboard", "All invoices", "Add invoice", "Expense extractor", "Expenses"]
+)
 
 filtered = apply_filters(enriched, search_query, state_filter, status_filter)
 
@@ -528,3 +632,103 @@ with tab_add:
             save_invoices(current)
             st.success("Invoice added.")
             st.rerun()
+
+with tab_extract:
+    st.subheader("Upload business expense invoice")
+    st.caption("Upload a PDF or TXT invoice. The app extracts likely fields, then you review and save them.")
+    expense_file = st.file_uploader("Expense invoice PDF or TXT", type=["pdf", "txt"], key="expense_invoice_upload")
+
+    extracted = {
+        "type_of_service": "",
+        "vendor": "",
+        "date": "",
+        "amount": "",
+        "currency": "EUR",
+        "paid_from": "",
+        "invoice": "",
+        "notes": "",
+    }
+
+    if expense_file:
+        try:
+            extracted_text = extract_text_from_expense_file(expense_file)
+            extracted.update(extract_expense_fields(extracted_text))
+            with st.expander("Extracted raw text preview"):
+                st.text_area("Raw text", extracted_text[:5000], height=220, disabled=True)
+        except Exception as exc:
+            st.error(f"Could not extract text from this file: {exc}")
+
+    with st.form("expense_extract_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            type_of_service = st.text_input("Type of service", value=extracted["type_of_service"])
+            vendor = st.text_input("Vendor", value=extracted["vendor"])
+            expense_date = st.text_input("Date", value=extracted["date"], placeholder="YYYY-MM-DD")
+            amount = st.text_input("Amount", value=extracted["amount"])
+        with col2:
+            currency = st.selectbox(
+                "Currency",
+                CURRENCIES,
+                index=CURRENCIES.index(extracted["currency"]) if extracted["currency"] in CURRENCIES else 0,
+            )
+            paid_from = st.selectbox(
+                "Paid From",
+                PAID_FROM_OPTIONS,
+                index=PAID_FROM_OPTIONS.index(extracted["paid_from"])
+                if extracted["paid_from"] in PAID_FROM_OPTIONS
+                else 0,
+            )
+            invoice = st.text_input("Invoice", value=extracted["invoice"])
+            notes = st.text_area("Notes", value=extracted["notes"])
+
+        save_expense = st.form_submit_button("Save expense", type="primary")
+
+    if save_expense:
+        if not vendor or not amount:
+            st.error("Vendor and amount are required before saving.")
+        else:
+            expenses = load_expenses()
+            row = {
+                "type_of_service": type_of_service.strip(),
+                "vendor": vendor.strip(),
+                "date": expense_date.strip(),
+                "amount": amount.strip(),
+                "currency": currency,
+                "paid_from": paid_from,
+                "invoice": invoice.strip(),
+                "notes": notes.strip(),
+            }
+            expenses = pd.concat([pd.DataFrame([row]), expenses], ignore_index=True)
+            save_expenses(expenses)
+            st.success("Expense saved.")
+            st.rerun()
+
+with tab_expenses:
+    st.subheader("Business expenses")
+    expenses = load_expenses()
+    if expenses.empty:
+        st.info("No expenses saved yet.")
+    else:
+        edited_expenses = st.data_editor(expenses, use_container_width=True, hide_index=True, key="expense_editor")
+        if st.button("Save expense table changes"):
+            save_expenses(edited_expenses)
+            st.success("Expense changes saved.")
+            st.rerun()
+
+        st.download_button(
+            "Download expenses Excel",
+            data=to_excel(edited_expenses),
+            file_name="business_expenses.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        st.download_button(
+            "Download expenses CSV",
+            data=edited_expenses.to_csv(index=False).encode("utf-8"),
+            file_name="business_expenses.csv",
+            mime="text/csv",
+        )
+
+    if st.button("Clear expenses"):
+        clear_expenses()
+        st.success("All expenses cleared.")
+        st.rerun()
