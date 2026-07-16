@@ -118,6 +118,39 @@ def clear_invoices() -> None:
     save_invoices(pd.DataFrame(columns=INVOICE_COLUMNS))
 
 
+def normalized_key(value: str) -> str:
+    return str(value).strip().lower()
+
+
+def duplicated_values(dataframe: pd.DataFrame, column: str) -> List[str]:
+    if column not in dataframe.columns or dataframe.empty:
+        return []
+    values = dataframe[column].astype(str).map(normalized_key)
+    values = values[values != ""]
+    duplicate_keys = sorted(values[values.duplicated()].unique())
+    original_values = []
+    for key in duplicate_keys:
+        match = dataframe[dataframe[column].astype(str).map(normalized_key) == key][column].iloc[0]
+        original_values.append(str(match))
+    return original_values
+
+
+def value_exists(dataframe: pd.DataFrame, column: str, value: str) -> bool:
+    key = normalized_key(value)
+    if not key or column not in dataframe.columns:
+        return False
+    return dataframe[column].astype(str).map(normalized_key).eq(key).any()
+
+
+def drop_duplicate_nonempty(dataframe: pd.DataFrame, column: str) -> pd.DataFrame:
+    if column not in dataframe.columns or dataframe.empty:
+        return dataframe
+    dataframe = dataframe.copy()
+    keys = dataframe[column].astype(str).map(normalized_key)
+    keep_mask = (keys == "") | ~keys.duplicated()
+    return dataframe[keep_mask]
+
+
 def load_expenses() -> pd.DataFrame:
     ensure_data_file()
     dataframe = pd.read_csv(EXPENSE_FILE, dtype=str).fillna("")
@@ -534,6 +567,13 @@ with st.sidebar:
     if uploaded_file:
         if st.button("Import uploaded file", type="primary"):
             uploaded_dataframe = normalize_columns(read_uploaded_file(uploaded_file))
+            duplicates = duplicated_values(uploaded_dataframe, "invoice_no")
+            if duplicates:
+                st.warning(
+                    "Duplicate invoice number(s) found in the uploaded file. "
+                    f"Keeping the first row only: {', '.join(duplicates)}"
+                )
+                uploaded_dataframe = drop_duplicate_nonempty(uploaded_dataframe, "invoice_no")
             save_invoices(uploaded_dataframe)
             st.success("Uploaded invoices imported.")
             st.rerun()
@@ -623,19 +663,26 @@ with tab_all:
 
     if st.button("Save visible table changes"):
         editable = edited.drop(columns=["days_overdue", "payment_state", "reminder_draft"], errors="ignore")
-        existing = load_invoices()
-        for _, changed_row in editable.iterrows():
-            invoice_no = str(changed_row.get("invoice_no", ""))
-            if not invoice_no:
-                continue
-            mask = existing["invoice_no"] == invoice_no
-            if mask.any():
-                for column in INVOICE_COLUMNS:
-                    if column in changed_row:
-                        existing.loc[mask, column] = changed_row.get(column, "")
-        save_invoices(existing)
-        st.success("Invoice changes saved.")
-        st.rerun()
+        duplicates = duplicated_values(editable, "invoice_no")
+        if duplicates:
+            st.error(
+                "Duplicate invoice warning: fix these duplicate invoice number(s) before saving: "
+                f"{', '.join(duplicates)}"
+            )
+        else:
+            existing = load_invoices()
+            for _, changed_row in editable.iterrows():
+                invoice_no = str(changed_row.get("invoice_no", ""))
+                if not invoice_no:
+                    continue
+                mask = existing["invoice_no"] == invoice_no
+                if mask.any():
+                    for column in INVOICE_COLUMNS:
+                        if column in changed_row:
+                            existing.loc[mask, column] = changed_row.get(column, "")
+            save_invoices(existing)
+            st.success("Invoice changes saved.")
+            st.rerun()
 
     st.download_button(
         "Download Excel",
@@ -687,10 +734,13 @@ with tab_add:
             st.error("Invoice number and customer name are required.")
         else:
             current = load_invoices()
-            current = pd.concat([pd.DataFrame([new_row]), current], ignore_index=True)
-            save_invoices(current)
-            st.success("Invoice added.")
-            st.rerun()
+            if value_exists(current, "invoice_no", new_row["invoice_no"]):
+                st.error(f"Duplicate invoice warning: invoice {new_row['invoice_no']} already exists.")
+            else:
+                current = pd.concat([pd.DataFrame([new_row]), current], ignore_index=True)
+                save_invoices(current)
+                st.success("Invoice added.")
+                st.rerun()
 
 with tab_extract:
     st.subheader("Upload business expense invoice")
@@ -761,10 +811,13 @@ with tab_extract:
                 "invoice": invoice.strip(),
                 "notes": notes.strip(),
             }
-            expenses = pd.concat([pd.DataFrame([row]), expenses], ignore_index=True)
-            save_expenses(expenses)
-            st.success("Expense saved.")
-            st.rerun()
+            if row["invoice"] and value_exists(expenses, "invoice", row["invoice"]):
+                st.error(f"Duplicate invoice warning: expense invoice {row['invoice']} already exists.")
+            else:
+                expenses = pd.concat([pd.DataFrame([row]), expenses], ignore_index=True)
+                save_expenses(expenses)
+                st.success("Expense saved.")
+                st.rerun()
 
 with tab_expenses:
     st.subheader("Business expenses")
@@ -774,9 +827,16 @@ with tab_expenses:
     else:
         edited_expenses = st.data_editor(expenses, use_container_width=True, hide_index=True, key="expense_editor")
         if st.button("Save expense table changes"):
-            save_expenses(edited_expenses)
-            st.success("Expense changes saved.")
-            st.rerun()
+            duplicates = duplicated_values(edited_expenses, "invoice")
+            if duplicates:
+                st.error(
+                    "Duplicate invoice warning: fix these duplicate expense invoice number(s) before saving: "
+                    f"{', '.join(duplicates)}"
+                )
+            else:
+                save_expenses(edited_expenses)
+                st.success("Expense changes saved.")
+                st.rerun()
 
         st.download_button(
             "Download expenses Excel",
