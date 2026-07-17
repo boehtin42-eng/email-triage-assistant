@@ -34,6 +34,21 @@ DEFAULT_FEEDS = [
     },
 ]
 
+DEFAULT_YOUTUBE_FEEDS = [
+    {
+        "source": "Two Minute Papers",
+        "type": "YouTube RSS",
+        "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbfYPyITQ-7l4upoX8nvctg",
+        "category": "AI research / trends",
+    },
+    {
+        "source": "Google Developers",
+        "type": "YouTube RSS",
+        "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw",
+        "category": "AI / developer tools",
+    },
+]
+
 BUSINESS_KEYWORDS = [
     "small business",
     "automation",
@@ -208,16 +223,22 @@ def apply_filters(
 
 with st.sidebar:
     st.header("Sources")
-    include_default_feeds = st.checkbox("Use default AI/business feeds", value=True)
-    custom_sources = st.text_area(
-        "Add RSS or YouTube RSS URLs",
-        placeholder=(
-            "One URL per line.\n"
-            "YouTube format:\n"
-            "https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID"
-        ),
-        height=150,
-    )
+    st.success("Built-in AI/business news sources load automatically.")
+    include_default_feeds = st.checkbox("Use built-in RSS feeds", value=True)
+    include_youtube_feeds = st.checkbox("Use built-in YouTube feeds", value=True)
+
+    with st.expander("Advanced: add extra RSS links"):
+        custom_sources = st.text_area(
+            "Optional extra RSS or YouTube RSS URLs",
+            placeholder=(
+                "One URL per line.\n"
+                "Example:\n"
+                "https://example.com/feed.xml"
+            ),
+            height=120,
+            key="optional_custom_sources",
+        )
+
     if st.button("Refresh feeds"):
         fetch_feed.clear()
         st.rerun()
@@ -230,13 +251,15 @@ with st.sidebar:
 feeds = []
 if include_default_feeds:
     feeds.extend(DEFAULT_FEEDS)
+if include_youtube_feeds:
+    feeds.extend(DEFAULT_YOUTUBE_FEEDS)
 feeds.extend(source_rows_from_text(custom_sources))
 
 st.title("Daily Business AI News Digest")
-st.caption("RSS and YouTube RSS dashboard for AI tools, process optimization, and small business ideas.")
+st.caption("Open the app and it automatically loads AI tools, process optimization, and small business news.")
 
 if not feeds:
-    st.warning("Add at least one RSS or YouTube RSS source to start.")
+    st.warning("Turn on at least one built-in source or add an optional RSS source to start.")
     st.stop()
 
 with st.spinner("Loading AI news sources..."):
@@ -288,6 +311,5 @@ with tab_sources:
     st.subheader("Active sources")
     st.dataframe(pd.DataFrame(feeds), use_container_width=True, hide_index=True)
     st.info(
-        "For YouTube, use the RSS format: "
-        "https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID"
+        "The app already loads built-in sources. Extra RSS or YouTube RSS links are optional."
     )
