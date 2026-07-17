@@ -1,12 +1,12 @@
 # Daily Business AI News Digest
 
-Streamlit dashboard for tracking AI tools, business automation ideas, and process optimization news from built-in RSS and YouTube RSS feeds.
+Streamlit dashboard for tracking business AI tools, ChatGPT/OpenAI/Codex updates, and process optimization news from built-in RSS and YouTube RSS feeds.
 
 ## What it does
 
 - Loads built-in AI/business RSS feeds automatically when the app opens
 - Loads built-in YouTube RSS feeds automatically
-- Scores each item for small-business relevance
+- Gives higher priority to ChatGPT, OpenAI, Codex, GPT, AI agents, and business workflow news
 - Highlights automation, agents, customer support, sales, CRM, invoice, email, GPT, and Codex related items
 - Shows action hints for business owners
 - Supports optional extra RSS URLs

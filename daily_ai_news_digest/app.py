@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import html
+import re
 from typing import Dict, List, Optional
 
 import feedparser
@@ -8,6 +10,12 @@ import streamlit as st
 
 
 DEFAULT_FEEDS = [
+    {
+        "source": "OpenAI News",
+        "type": "RSS",
+        "url": "https://openai.com/news/rss.xml",
+        "category": "ChatGPT / OpenAI / Codex",
+    },
     {
         "source": "Google Blog",
         "type": "RSS",
@@ -47,6 +55,22 @@ DEFAULT_YOUTUBE_FEEDS = [
         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw",
         "category": "AI / developer tools",
     },
+]
+
+TOP_PRIORITY_KEYWORDS = [
+    "chatgpt",
+    "openai",
+    "codex",
+    "gpt-",
+    "gpt 5",
+    "gpt-5",
+    "gpt 4",
+    "gpt-4",
+    "model release",
+    "agent mode",
+    "ai agent",
+    "developer tool",
+    "coding agent",
 ]
 
 BUSINESS_KEYWORDS = [
@@ -90,28 +114,48 @@ def parse_date(value: Optional[str]) -> Optional[datetime]:
 
 
 def clean_text(value: str) -> str:
-    return " ".join(str(value or "").replace("\n", " ").split())
+    text = html.unescape(str(value or ""))
+    text = re.sub(r"<[^>]+>", " ", text)
+    return " ".join(text.replace("\n", " ").split())
 
 
 def score_relevance(title: str, summary: str) -> int:
     text = f"{title} {summary}".lower()
     score = 0
+    for keyword in TOP_PRIORITY_KEYWORDS:
+        if keyword in text:
+            score += 4
     for keyword in BUSINESS_KEYWORDS:
         if keyword in text:
-            score += 1
+            score += 2
     return score
 
 
 def relevance_label(score: int) -> str:
-    if score >= 4:
+    if score >= 8:
         return "High"
-    if score >= 2:
+    if score >= 4:
         return "Medium"
     return "Low"
 
 
+def priority_reason(title: str, summary: str) -> str:
+    text = f"{title} {summary}".lower()
+    if any(keyword in text for keyword in ["chatgpt", "openai", "codex", "gpt-", "gpt 5", "gpt-5"]):
+        return "ChatGPT / OpenAI / Codex"
+    if any(keyword in text for keyword in ["automation", "workflow", "process", "agent", "chatbot"]):
+        return "Business process automation"
+    if any(keyword in text for keyword in ["sales", "marketing", "crm", "customer support"]):
+        return "Sales / customer workflow"
+    if any(keyword in text for keyword in ["invoice", "email", "spreadsheet", "google workspace"]):
+        return "Admin time-saving"
+    return "General AI business trend"
+
+
 def action_hint(title: str, summary: str) -> str:
     text = f"{title} {summary}".lower()
+    if "chatgpt" in text or "openai" in text or "codex" in text or "gpt-" in text:
+        return "Review first: this may affect ChatGPT, Codex, internal tools, or AI workflows."
     if "agent" in text or "chatbot" in text:
         return "Check if this can reduce support or admin replies."
     if "automation" in text or "workflow" in text or "process" in text:
@@ -163,6 +207,7 @@ def fetch_feed(source: str, feed_type: str, url: str, category: str) -> List[Dic
                 "summary": summary[:320],
                 "relevance": relevance_label(score),
                 "score": score,
+                "priority_reason": priority_reason(title, summary),
                 "action_hint": action_hint(title, summary),
                 "link": link,
             }
@@ -191,6 +236,7 @@ def fetch_all(feeds: List[Dict[str, str]]) -> pd.DataFrame:
                 "summary",
                 "relevance",
                 "score",
+                "priority_reason",
                 "action_hint",
                 "link",
             ]
@@ -244,7 +290,7 @@ with st.sidebar:
         st.rerun()
 
     st.header("Filters")
-    search = st.text_input("Search", placeholder="automation, agent, Codex, CRM...")
+    search = st.text_input("Search", placeholder="ChatGPT, Codex, automation, agent...")
     relevance_filter = st.multiselect("Relevance", ["High", "Medium", "Low"], default=["High", "Medium"])
 
 
@@ -256,7 +302,7 @@ if include_youtube_feeds:
 feeds.extend(source_rows_from_text(custom_sources))
 
 st.title("Daily Business AI News Digest")
-st.caption("Open the app and it automatically loads AI tools, process optimization, and small business news.")
+st.caption("Open the app and it prioritizes business AI, ChatGPT, OpenAI, Codex, and process optimization news.")
 
 if not feeds:
     st.warning("Turn on at least one built-in source or add an optional RSS source to start.")
@@ -281,10 +327,10 @@ metric_cols[1].metric("High relevance", int((news["relevance"] == "High").sum())
 metric_cols[2].metric("Medium relevance", int((news["relevance"] == "Medium").sum()))
 metric_cols[3].metric("Sources", len(source_options))
 
-tab_focus, tab_all, tab_sources = st.tabs(["Action digest", "All items", "Sources"])
+tab_focus, tab_all, tab_sources = st.tabs(["Priority digest", "All items", "Sources"])
 
 with tab_focus:
-    st.subheader("Most relevant for small business")
+    st.subheader("Business AI, ChatGPT, OpenAI, and Codex priority news")
     focus_rows = filtered_news[filtered_news["relevance"].isin(["High", "Medium"])].head(25)
     if focus_rows.empty:
         st.info("No relevant items found with the current filters.")
@@ -292,13 +338,26 @@ with tab_focus:
         for _, row in focus_rows.iterrows():
             with st.container(border=True):
                 st.markdown(f"### [{row['title']}]({row['link']})")
-                st.caption(f"{row['date']} • {row['source']} • {row['category']} • {row['relevance']} relevance")
+                st.caption(
+                    f"{row['date']} • {row['source']} • {row['priority_reason']} • "
+                    f"{row['relevance']} relevance"
+                )
                 st.write(row["summary"])
                 st.info(row["action_hint"])
 
 with tab_all:
     st.subheader("All fetched items")
-    display_columns = ["date", "source", "category", "title", "relevance", "score", "action_hint", "link"]
+    display_columns = [
+        "date",
+        "source",
+        "category",
+        "priority_reason",
+        "title",
+        "relevance",
+        "score",
+        "action_hint",
+        "link",
+    ]
     st.dataframe(filtered_news[display_columns], use_container_width=True, hide_index=True)
     st.download_button(
         "Download digest CSV",
