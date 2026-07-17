@@ -1,0 +1,293 @@
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import Dict, List, Optional
+
+import feedparser
+import pandas as pd
+import streamlit as st
+
+
+DEFAULT_FEEDS = [
+    {
+        "source": "Google Blog",
+        "type": "RSS",
+        "url": "https://blog.google/feed/",
+        "category": "AI / Google",
+    },
+    {
+        "source": "VentureBeat AI",
+        "type": "RSS",
+        "url": "https://venturebeat.com/category/ai/feed/",
+        "category": "AI tools / business",
+    },
+    {
+        "source": "TechCrunch AI",
+        "type": "RSS",
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "category": "AI startups / tools",
+    },
+    {
+        "source": "MIT Technology Review",
+        "type": "RSS",
+        "url": "https://www.technologyreview.com/feed/",
+        "category": "AI trends",
+    },
+]
+
+BUSINESS_KEYWORDS = [
+    "small business",
+    "automation",
+    "workflow",
+    "productivity",
+    "agent",
+    "agents",
+    "chatbot",
+    "customer support",
+    "sales",
+    "marketing",
+    "invoice",
+    "email",
+    "crm",
+    "codex",
+    "gpt",
+    "ai tool",
+    "tools",
+    "process",
+    "operations",
+    "spreadsheet",
+    "google workspace",
+    "zapier",
+    "make.com",
+    "n8n",
+]
+
+
+st.set_page_config(page_title="Daily Business AI News Digest", layout="wide")
+
+
+def parse_date(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return parsedate_to_datetime(value)
+    except Exception:
+        return None
+
+
+def clean_text(value: str) -> str:
+    return " ".join(str(value or "").replace("\n", " ").split())
+
+
+def score_relevance(title: str, summary: str) -> int:
+    text = f"{title} {summary}".lower()
+    score = 0
+    for keyword in BUSINESS_KEYWORDS:
+        if keyword in text:
+            score += 1
+    return score
+
+
+def relevance_label(score: int) -> str:
+    if score >= 4:
+        return "High"
+    if score >= 2:
+        return "Medium"
+    return "Low"
+
+
+def action_hint(title: str, summary: str) -> str:
+    text = f"{title} {summary}".lower()
+    if "agent" in text or "chatbot" in text:
+        return "Check if this can reduce support or admin replies."
+    if "automation" in text or "workflow" in text or "process" in text:
+        return "Look for a repeatable business process to automate."
+    if "sales" in text or "crm" in text or "marketing" in text:
+        return "Review for lead generation or customer follow-up ideas."
+    if "email" in text or "invoice" in text:
+        return "Review for admin time-saving use cases."
+    if "codex" in text or "gpt" in text:
+        return "Check if this can improve internal tool building."
+    return "Skim and decide if it is relevant to current business workflows."
+
+
+def source_rows_from_text(custom_sources: str) -> List[Dict[str, str]]:
+    rows = []
+    for line in custom_sources.splitlines():
+        url = line.strip()
+        if not url or url.startswith("#"):
+            continue
+        rows.append(
+            {
+                "source": "Custom feed",
+                "type": "RSS / YouTube RSS",
+                "url": url,
+                "category": "Custom",
+            }
+        )
+    return rows
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_feed(source: str, feed_type: str, url: str, category: str) -> List[Dict[str, str]]:
+    parsed = feedparser.parse(url)
+    items = []
+    for entry in parsed.entries[:20]:
+        title = clean_text(entry.get("title", ""))
+        summary = clean_text(entry.get("summary", entry.get("description", "")))
+        link = entry.get("link", "")
+        published = parse_date(entry.get("published") or entry.get("updated"))
+        published_text = published.strftime("%Y-%m-%d") if published else ""
+        score = score_relevance(title, summary)
+        items.append(
+            {
+                "date": published_text,
+                "source": source,
+                "type": feed_type,
+                "category": category,
+                "title": title,
+                "summary": summary[:320],
+                "relevance": relevance_label(score),
+                "score": score,
+                "action_hint": action_hint(title, summary),
+                "link": link,
+            }
+        )
+    return items
+
+
+def fetch_all(feeds: List[Dict[str, str]]) -> pd.DataFrame:
+    rows = []
+    errors = []
+    for feed in feeds:
+        try:
+            rows.extend(fetch_feed(feed["source"], feed["type"], feed["url"], feed["category"]))
+        except Exception as exc:
+            errors.append(f"{feed['source']}: {exc}")
+
+    dataframe = pd.DataFrame(rows)
+    if dataframe.empty:
+        dataframe = pd.DataFrame(
+            columns=[
+                "date",
+                "source",
+                "type",
+                "category",
+                "title",
+                "summary",
+                "relevance",
+                "score",
+                "action_hint",
+                "link",
+            ]
+        )
+    return dataframe, errors
+
+
+def apply_filters(
+    dataframe: pd.DataFrame,
+    search: str,
+    relevance_filter: List[str],
+    source_filter: List[str],
+) -> pd.DataFrame:
+    filtered = dataframe.copy()
+    if search:
+        query = search.lower()
+        mask = filtered[["title", "summary", "action_hint", "source"]].astype(str).apply(
+            lambda column: column.str.lower().str.contains(query, na=False)
+        ).any(axis=1)
+        filtered = filtered[mask]
+
+    if relevance_filter:
+        filtered = filtered[filtered["relevance"].isin(relevance_filter)]
+
+    if source_filter:
+        filtered = filtered[filtered["source"].isin(source_filter)]
+
+    return filtered.sort_values(["score", "date"], ascending=[False, False])
+
+
+with st.sidebar:
+    st.header("Sources")
+    include_default_feeds = st.checkbox("Use default AI/business feeds", value=True)
+    custom_sources = st.text_area(
+        "Add RSS or YouTube RSS URLs",
+        placeholder=(
+            "One URL per line.\n"
+            "YouTube format:\n"
+            "https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID"
+        ),
+        height=150,
+    )
+    if st.button("Refresh feeds"):
+        fetch_feed.clear()
+        st.rerun()
+
+    st.header("Filters")
+    search = st.text_input("Search", placeholder="automation, agent, Codex, CRM...")
+    relevance_filter = st.multiselect("Relevance", ["High", "Medium", "Low"], default=["High", "Medium"])
+
+
+feeds = []
+if include_default_feeds:
+    feeds.extend(DEFAULT_FEEDS)
+feeds.extend(source_rows_from_text(custom_sources))
+
+st.title("Daily Business AI News Digest")
+st.caption("RSS and YouTube RSS dashboard for AI tools, process optimization, and small business ideas.")
+
+if not feeds:
+    st.warning("Add at least one RSS or YouTube RSS source to start.")
+    st.stop()
+
+with st.spinner("Loading AI news sources..."):
+    news, errors = fetch_all(feeds)
+
+if errors:
+    for error in errors:
+        st.warning(error)
+
+source_options = sorted(news["source"].dropna().unique().tolist()) if not news.empty else []
+with st.sidebar:
+    source_filter = st.multiselect("Source", source_options)
+
+filtered_news = apply_filters(news, search, relevance_filter, source_filter)
+
+metric_cols = st.columns(4)
+metric_cols[0].metric("Total items", len(news))
+metric_cols[1].metric("High relevance", int((news["relevance"] == "High").sum()))
+metric_cols[2].metric("Medium relevance", int((news["relevance"] == "Medium").sum()))
+metric_cols[3].metric("Sources", len(source_options))
+
+tab_focus, tab_all, tab_sources = st.tabs(["Action digest", "All items", "Sources"])
+
+with tab_focus:
+    st.subheader("Most relevant for small business")
+    focus_rows = filtered_news[filtered_news["relevance"].isin(["High", "Medium"])].head(25)
+    if focus_rows.empty:
+        st.info("No relevant items found with the current filters.")
+    else:
+        for _, row in focus_rows.iterrows():
+            with st.container(border=True):
+                st.markdown(f"### [{row['title']}]({row['link']})")
+                st.caption(f"{row['date']} • {row['source']} • {row['category']} • {row['relevance']} relevance")
+                st.write(row["summary"])
+                st.info(row["action_hint"])
+
+with tab_all:
+    st.subheader("All fetched items")
+    display_columns = ["date", "source", "category", "title", "relevance", "score", "action_hint", "link"]
+    st.dataframe(filtered_news[display_columns], use_container_width=True, hide_index=True)
+    st.download_button(
+        "Download digest CSV",
+        data=filtered_news.to_csv(index=False).encode("utf-8"),
+        file_name=f"business_ai_news_digest_{datetime.now(timezone.utc).strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+    )
+
+with tab_sources:
+    st.subheader("Active sources")
+    st.dataframe(pd.DataFrame(feeds), use_container_width=True, hide_index=True)
+    st.info(
+        "For YouTube, use the RSS format: "
+        "https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID"
+    )

@@ -1,0 +1,6 @@
+# Paste one URL per line into the app sidebar.
+# YouTube channel RSS format:
+# https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID
+#
+# Example only:
+# https://www.youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw
