@@ -7,6 +7,8 @@ Streamlit dashboard for tracking business AI tools, ChatGPT/OpenAI/Codex updates
 - Loads built-in AI/business RSS feeds automatically when the app opens
 - Loads built-in YouTube RSS feeds automatically
 - Gives higher priority to ChatGPT, OpenAI, Codex, GPT, AI agents, and business workflow news
+- Includes a ChatGPT/OpenAI/Codex-only quick filter
+- Shows a one-line "why it matters for small business" note for each item
 - Highlights automation, agents, customer support, sales, CRM, invoice, email, GPT, and Codex related items
 - Shows action hints for business owners
 - Supports optional extra RSS URLs

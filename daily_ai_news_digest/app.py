@@ -105,10 +105,17 @@ st.set_page_config(page_title="Daily Business AI News Digest", layout="wide")
 
 if "relevance_filter" not in st.session_state:
     st.session_state["relevance_filter"] = ["High", "Medium"]
+if "topic_filter" not in st.session_state:
+    st.session_state["topic_filter"] = "All"
 
 
 def set_relevance_filter(values: List[str]) -> None:
     st.session_state["relevance_filter"] = values
+
+
+def set_filters(relevance_values: List[str], topic_value: str) -> None:
+    st.session_state["relevance_filter"] = relevance_values
+    st.session_state["topic_filter"] = topic_value
 
 
 def parse_date(value: Optional[str]) -> Optional[datetime]:
@@ -148,7 +155,7 @@ def relevance_label(score: int) -> str:
 
 def priority_reason(title: str, summary: str) -> str:
     text = f"{title} {summary}".lower()
-    if any(keyword in text for keyword in ["chatgpt", "openai", "codex", "gpt-", "gpt 5", "gpt-5"]):
+    if is_openai_codex_news(title, summary):
         return "ChatGPT / OpenAI / Codex"
     if any(keyword in text for keyword in ["automation", "workflow", "process", "agent", "chatbot"]):
         return "Business process automation"
@@ -157,6 +164,23 @@ def priority_reason(title: str, summary: str) -> str:
     if any(keyword in text for keyword in ["invoice", "email", "spreadsheet", "google workspace"]):
         return "Admin time-saving"
     return "General AI business trend"
+
+
+def is_openai_codex_news(title: str, summary: str) -> bool:
+    text = f"{title} {summary}".lower()
+    return any(
+        keyword in text
+        for keyword in [
+            "chatgpt",
+            "openai",
+            "codex",
+            "gpt-",
+            "gpt 5",
+            "gpt-5",
+            "gpt 4",
+            "gpt-4",
+        ]
+    )
 
 
 def action_hint(title: str, summary: str) -> str:
@@ -174,6 +198,21 @@ def action_hint(title: str, summary: str) -> str:
     if "codex" in text or "gpt" in text:
         return "Check if this can improve internal tool building."
     return "Skim and decide if it is relevant to current business workflows."
+
+
+def why_it_matters(title: str, summary: str) -> str:
+    text = f"{title} {summary}".lower()
+    if is_openai_codex_news(title, summary):
+        return "Useful because ChatGPT/OpenAI/Codex changes can improve internal tools, drafting, research, or automation workflows."
+    if "agent" in text or "chatbot" in text:
+        return "Useful because agents or chatbots may reduce time spent on replies, support, and admin tasks."
+    if "automation" in text or "workflow" in text or "process" in text:
+        return "Useful because it may reveal a repeatable business process that can be automated."
+    if "sales" in text or "crm" in text or "marketing" in text:
+        return "Useful because it may improve lead handling, follow-ups, or customer communication."
+    if "invoice" in text or "email" in text or "spreadsheet" in text:
+        return "Useful because it may reduce manual office work around invoices, emails, and reports."
+    return "Useful as a quick signal for AI trends that may become relevant to business operations."
 
 
 def source_rows_from_text(custom_sources: str) -> List[Dict[str, str]]:
@@ -214,8 +253,10 @@ def fetch_feed(source: str, feed_type: str, url: str, category: str) -> List[Dic
                 "summary": summary[:320],
                 "relevance": relevance_label(score),
                 "score": score,
+                "is_openai_codex": is_openai_codex_news(title, summary),
                 "priority_reason": priority_reason(title, summary),
                 "action_hint": action_hint(title, summary),
+                "why_it_matters": why_it_matters(title, summary),
                 "link": link,
             }
         )
@@ -243,8 +284,10 @@ def fetch_all(feeds: List[Dict[str, str]]) -> pd.DataFrame:
                 "summary",
                 "relevance",
                 "score",
+                "is_openai_codex",
                 "priority_reason",
                 "action_hint",
+                "why_it_matters",
                 "link",
             ]
         )
@@ -256,6 +299,7 @@ def apply_filters(
     search: str,
     relevance_filter: List[str],
     source_filter: List[str],
+    topic_filter: str,
 ) -> pd.DataFrame:
     filtered = dataframe.copy()
     if search:
@@ -270,6 +314,9 @@ def apply_filters(
 
     if source_filter:
         filtered = filtered[filtered["source"].isin(source_filter)]
+
+    if topic_filter == "ChatGPT / OpenAI / Codex only":
+        filtered = filtered[filtered["is_openai_codex"]]
 
     return filtered.sort_values(["score", "date"], ascending=[False, False])
 
@@ -326,48 +373,67 @@ source_options = sorted(news["source"].dropna().unique().tolist()) if not news.e
 with st.sidebar:
     source_filter = st.multiselect("Source", source_options)
 
-filtered_news = apply_filters(news, search, relevance_filter, source_filter)
+topic_filter = st.session_state["topic_filter"]
+filtered_news = apply_filters(news, search, relevance_filter, source_filter, topic_filter)
 
 total_count = len(news)
 high_count = int((news["relevance"] == "High").sum())
 medium_count = int((news["relevance"] == "Medium").sum())
+openai_codex_count = int(news["is_openai_codex"].sum()) if "is_openai_codex" in news else 0
 shown_count = len(filtered_news)
 active_relevance = ", ".join(relevance_filter) if relevance_filter else "All"
 
-metric_cols = st.columns(5)
+metric_cols = st.columns(6)
 with metric_cols[0]:
     st.metric("Total items", total_count)
-    st.button("Show all news", key="filter_all", on_click=set_relevance_filter, args=([],), use_container_width=True)
+    st.button(
+        "Show all news",
+        key="filter_all",
+        on_click=set_filters,
+        args=([], "All"),
+        use_container_width=True,
+    )
 with metric_cols[1]:
     st.metric("Showing now", shown_count)
-    st.caption(f"Filter: {active_relevance}")
+    st.caption(f"{active_relevance} • {topic_filter}")
 with metric_cols[2]:
     st.metric("High relevance", high_count)
     st.button(
         f"Show high only ({high_count})",
         key="filter_high",
-        on_click=set_relevance_filter,
-        args=(["High"],),
+        on_click=set_filters,
+        args=(["High"], "All"),
         use_container_width=True,
     )
 with metric_cols[3]:
+    st.metric("OpenAI/Codex", openai_codex_count)
+    st.button(
+        "ChatGPT / OpenAI / Codex only",
+        key="filter_openai_codex",
+        on_click=set_filters,
+        args=([], "ChatGPT / OpenAI / Codex only"),
+        use_container_width=True,
+    )
+with metric_cols[4]:
     st.metric("Medium relevance", medium_count)
     st.button(
         f"Show medium only ({medium_count})",
         key="filter_medium",
-        on_click=set_relevance_filter,
-        args=(["Medium"],),
+        on_click=set_filters,
+        args=(["Medium"], "All"),
         use_container_width=True,
     )
-with metric_cols[4]:
+with metric_cols[5]:
     st.metric("Sources", len(source_options))
 
-st.info(f"Showing {shown_count} item(s). Current relevance filter: {active_relevance}.")
+st.info(f"Showing {shown_count} item(s). Relevance: {active_relevance}. Topic: {topic_filter}.")
 
 tab_focus, tab_all, tab_sources = st.tabs(["Priority digest", "All items", "Sources"])
 
 with tab_focus:
-    if relevance_filter == ["High"]:
+    if topic_filter == "ChatGPT / OpenAI / Codex only":
+        st.subheader("ChatGPT / OpenAI / Codex news only")
+    elif relevance_filter == ["High"]:
         st.subheader("High relevance news only")
     elif relevance_filter == ["Medium"]:
         st.subheader("Medium relevance news only")
@@ -387,6 +453,7 @@ with tab_focus:
                     f"{row['relevance']} relevance"
                 )
                 st.write(row["summary"])
+                st.success(f"Why it matters for small business: {row['why_it_matters']}")
                 st.info(row["action_hint"])
 
 with tab_all:
@@ -400,6 +467,7 @@ with tab_all:
         "relevance",
         "score",
         "action_hint",
+        "why_it_matters",
         "link",
     ]
     st.dataframe(filtered_news[display_columns], use_container_width=True, hide_index=True)
