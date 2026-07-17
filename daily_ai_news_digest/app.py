@@ -331,33 +331,50 @@ filtered_news = apply_filters(news, search, relevance_filter, source_filter)
 total_count = len(news)
 high_count = int((news["relevance"] == "High").sum())
 medium_count = int((news["relevance"] == "Medium").sum())
+shown_count = len(filtered_news)
 active_relevance = ", ".join(relevance_filter) if relevance_filter else "All"
 
-metric_cols = st.columns(4)
+metric_cols = st.columns(5)
 with metric_cols[0]:
     st.metric("Total items", total_count)
-    st.button("Show all", key="filter_all", on_click=set_relevance_filter, args=([],), use_container_width=True)
+    st.button("Show all news", key="filter_all", on_click=set_relevance_filter, args=([],), use_container_width=True)
 with metric_cols[1]:
-    st.metric("High relevance", high_count)
-    st.button("Show high only", key="filter_high", on_click=set_relevance_filter, args=(["High"],), use_container_width=True)
+    st.metric("Showing now", shown_count)
+    st.caption(f"Filter: {active_relevance}")
 with metric_cols[2]:
+    st.metric("High relevance", high_count)
+    st.button(
+        f"Show high only ({high_count})",
+        key="filter_high",
+        on_click=set_relevance_filter,
+        args=(["High"],),
+        use_container_width=True,
+    )
+with metric_cols[3]:
     st.metric("Medium relevance", medium_count)
     st.button(
-        "Show medium only",
+        f"Show medium only ({medium_count})",
         key="filter_medium",
         on_click=set_relevance_filter,
         args=(["Medium"],),
         use_container_width=True,
     )
-with metric_cols[3]:
+with metric_cols[4]:
     st.metric("Sources", len(source_options))
 
-st.caption(f"Current relevance filter: {active_relevance}")
+st.info(f"Showing {shown_count} item(s). Current relevance filter: {active_relevance}.")
 
 tab_focus, tab_all, tab_sources = st.tabs(["Priority digest", "All items", "Sources"])
 
 with tab_focus:
-    st.subheader("Business AI, ChatGPT, OpenAI, and Codex priority news")
+    if relevance_filter == ["High"]:
+        st.subheader("High relevance news only")
+    elif relevance_filter == ["Medium"]:
+        st.subheader("Medium relevance news only")
+    elif not relevance_filter:
+        st.subheader("All AI/business news")
+    else:
+        st.subheader("Business AI, ChatGPT, OpenAI, and Codex priority news")
     focus_rows = filtered_news.head(25)
     if focus_rows.empty:
         st.info("No relevant items found with the current filters.")
