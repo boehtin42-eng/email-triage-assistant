@@ -103,6 +103,13 @@ BUSINESS_KEYWORDS = [
 
 st.set_page_config(page_title="Daily Business AI News Digest", layout="wide")
 
+if "relevance_filter" not in st.session_state:
+    st.session_state["relevance_filter"] = ["High", "Medium"]
+
+
+def set_relevance_filter(values: List[str]) -> None:
+    st.session_state["relevance_filter"] = values
+
 
 def parse_date(value: Optional[str]) -> Optional[datetime]:
     if not value:
@@ -291,7 +298,7 @@ with st.sidebar:
 
     st.header("Filters")
     search = st.text_input("Search", placeholder="ChatGPT, Codex, automation, agent...")
-    relevance_filter = st.multiselect("Relevance", ["High", "Medium", "Low"], default=["High", "Medium"])
+    relevance_filter = st.multiselect("Relevance", ["High", "Medium", "Low"], key="relevance_filter")
 
 
 feeds = []
@@ -321,17 +328,37 @@ with st.sidebar:
 
 filtered_news = apply_filters(news, search, relevance_filter, source_filter)
 
+total_count = len(news)
+high_count = int((news["relevance"] == "High").sum())
+medium_count = int((news["relevance"] == "Medium").sum())
+active_relevance = ", ".join(relevance_filter) if relevance_filter else "All"
+
 metric_cols = st.columns(4)
-metric_cols[0].metric("Total items", len(news))
-metric_cols[1].metric("High relevance", int((news["relevance"] == "High").sum()))
-metric_cols[2].metric("Medium relevance", int((news["relevance"] == "Medium").sum()))
-metric_cols[3].metric("Sources", len(source_options))
+with metric_cols[0]:
+    st.metric("Total items", total_count)
+    st.button("Show all", key="filter_all", on_click=set_relevance_filter, args=([],), use_container_width=True)
+with metric_cols[1]:
+    st.metric("High relevance", high_count)
+    st.button("Show high only", key="filter_high", on_click=set_relevance_filter, args=(["High"],), use_container_width=True)
+with metric_cols[2]:
+    st.metric("Medium relevance", medium_count)
+    st.button(
+        "Show medium only",
+        key="filter_medium",
+        on_click=set_relevance_filter,
+        args=(["Medium"],),
+        use_container_width=True,
+    )
+with metric_cols[3]:
+    st.metric("Sources", len(source_options))
+
+st.caption(f"Current relevance filter: {active_relevance}")
 
 tab_focus, tab_all, tab_sources = st.tabs(["Priority digest", "All items", "Sources"])
 
 with tab_focus:
     st.subheader("Business AI, ChatGPT, OpenAI, and Codex priority news")
-    focus_rows = filtered_news[filtered_news["relevance"].isin(["High", "Medium"])].head(25)
+    focus_rows = filtered_news.head(25)
     if focus_rows.empty:
         st.info("No relevant items found with the current filters.")
     else:
