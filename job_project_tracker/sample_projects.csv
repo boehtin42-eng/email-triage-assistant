@@ -1,0 +1,5 @@
+project_name,customer,assigned_person,status,priority,start_date,deadline,next_action,last_update,notes
+Website refresh,Bright Office GmbH,Anna,In progress,High,2026-07-10,2026-07-22,Send homepage draft for approval,2026-07-19,Customer wants a cleaner mobile layout.
+Monthly cleaning contract,Maria Keller,Oakar,Waiting,Medium,2026-07-15,2026-07-19,Confirm final service schedule,2026-07-18,Waiting for customer confirmation.
+Invoice automation setup,Keller Project Team,Boe Htin,Blocked,High,2026-07-06,2026-07-18,Ask customer for invoice sample files,2026-07-17,Blocked until sample invoices are received.
+New office setup,Berlin Office GmbH,Anna,Not started,Low,2026-07-20,2026-08-02,Prepare project checklist,2026-07-19,Internal preparation.
