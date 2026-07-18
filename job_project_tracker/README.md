@@ -6,6 +6,7 @@ Streamlit app for tracking small-business jobs and customer projects.
 
 - Add projects with customer, assigned person, deadline, status, priority, notes, and next action
 - Shows action-focused dashboard for overdue, due today, due this week, blocked, waiting, and high-priority projects
+- Creates copy-ready reminder drafts for overdue, due today, due this week, blocked, and waiting projects
 - Supports CSV/Excel upload
 - Editable project table
 - Excel and CSV export

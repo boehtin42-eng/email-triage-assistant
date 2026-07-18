@@ -200,6 +200,80 @@ def dataframe_to_excel(dataframe: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
+def reminder_recipients(row: pd.Series) -> str:
+    assigned = str(row.get("assigned_person", "")).strip()
+    customer = str(row.get("customer", "")).strip()
+    if assigned and customer:
+        return f"{assigned} / {customer}"
+    return assigned or customer or "Team"
+
+
+def reminder_subject(row: pd.Series) -> str:
+    state = str(row.get("deadline_state", ""))
+    project = str(row.get("project_name", "Project"))
+    if state == "Overdue":
+        return f"Reminder: {project} is overdue"
+    if state == "Due today":
+        return f"Reminder: {project} is due today"
+    if state == "Due this week":
+        return f"Reminder: {project} is due this week"
+    if str(row.get("status", "")) == "Blocked":
+        return f"Reminder: {project} is blocked"
+    return f"Reminder: {project} needs follow-up"
+
+
+def reminder_message(row: pd.Series, tone: str) -> str:
+    project = str(row.get("project_name", "the project"))
+    customer = str(row.get("customer", ""))
+    assigned = str(row.get("assigned_person", ""))
+    state = str(row.get("deadline_state", ""))
+    deadline = str(row.get("deadline", ""))
+    next_action = str(row.get("next_action", "")).strip() or "Please confirm the next action."
+    notes = str(row.get("notes", "")).strip()
+
+    greeting = "Hi"
+    if tone == "Direct":
+        opening = f"Quick reminder about {project}."
+    elif tone == "Polite":
+        opening = f"I wanted to gently follow up on {project}."
+    else:
+        opening = f"Just a friendly reminder about {project}."
+
+    lines = [
+        f"{greeting} {assigned or 'team'},",
+        "",
+        opening,
+    ]
+    if customer:
+        lines.append(f"Customer: {customer}")
+    if deadline:
+        lines.append(f"Deadline: {deadline} ({state})")
+    lines.extend(["", f"Next action: {next_action}"])
+    if notes:
+        lines.extend(["", f"Notes: {notes}"])
+    lines.extend(["", "Please update the project status when this is handled."])
+    return "\n".join(lines)
+
+
+def build_digest(dataframe: pd.DataFrame) -> str:
+    if dataframe.empty:
+        return "No project reminders for today."
+
+    lines = [f"Project reminder digest - {date.today().strftime('%Y-%m-%d')}", ""]
+    for index, row in dataframe.reset_index(drop=True).iterrows():
+        lines.extend(
+            [
+                f"{index + 1}. {row['project_name']} ({row['deadline_state']})",
+                f"   Customer: {row['customer'] or '-'}",
+                f"   Assigned: {row['assigned_person'] or '-'}",
+                f"   Deadline: {row['deadline'] or '-'}",
+                f"   Next action: {row['next_action'] or '-'}",
+                "",
+            ]
+        )
+    return "\n".join(lines).strip()
+
+
 def sample_projects() -> pd.DataFrame:
     today = date.today()
     rows = [
@@ -350,7 +424,9 @@ with metric_cols[5]:
 active_status = ", ".join(status_filter) if status_filter else "All"
 st.info(f"Showing {len(filtered_projects)} project(s). Deadline view: {deadline_view}. Status: {active_status}.")
 
-tab_action, tab_all, tab_add = st.tabs(["Action dashboard", "All projects", "Add project"])
+tab_action, tab_reminders, tab_all, tab_add = st.tabs(
+    ["Action dashboard", "Reminders", "All projects", "Add project"]
+)
 
 with tab_action:
     st.subheader("Projects needing attention")
@@ -383,6 +459,68 @@ with tab_action:
             st.write(f"Deadline: {row['deadline'] or 'No deadline'}")
             if row["notes"]:
                 st.info(row["notes"])
+
+with tab_reminders:
+    st.subheader("Reminder drafts")
+    reminder_candidates = filtered_projects[
+        filtered_projects["deadline_state"].isin(["Overdue", "Due today", "Due this week"])
+        | filtered_projects["status"].isin(["Blocked", "Waiting"])
+    ]
+
+    col1, col2 = st.columns(2)
+    tone = col1.selectbox("Reminder tone", ["Friendly", "Polite", "Direct"])
+    recipient_view = col2.selectbox("View", ["All reminder candidates", "Overdue only", "Blocked only"])
+
+    if recipient_view == "Overdue only":
+        reminder_candidates = reminder_candidates[reminder_candidates["deadline_state"] == "Overdue"]
+    elif recipient_view == "Blocked only":
+        reminder_candidates = reminder_candidates[reminder_candidates["status"] == "Blocked"]
+
+    if reminder_candidates.empty:
+        st.info("No reminder candidates found with the current filters.")
+    else:
+        st.dataframe(
+            reminder_candidates[
+                [
+                    "project_name",
+                    "customer",
+                    "assigned_person",
+                    "status",
+                    "deadline",
+                    "deadline_state",
+                    "next_action",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+        options = reminder_candidates.index.tolist()
+        selected_index = st.selectbox(
+            "Choose a project for reminder draft",
+            options,
+            format_func=lambda index: (
+                f"{reminder_candidates.loc[index, 'deadline_state']} | "
+                f"{reminder_candidates.loc[index, 'project_name']} | "
+                f"{reminder_recipients(reminder_candidates.loc[index])}"
+            ),
+        )
+        selected_row = reminder_candidates.loc[selected_index]
+        subject = reminder_subject(selected_row)
+        message = reminder_message(selected_row, tone)
+
+        st.text_input("Reminder subject", value=subject)
+        st.text_area("Reminder message", value=message, height=260)
+
+        digest = build_digest(reminder_candidates)
+        st.download_button(
+            "Download reminder digest TXT",
+            data=digest.encode("utf-8"),
+            file_name=f"project_reminder_digest_{date.today().strftime('%Y%m%d')}.txt",
+            mime="text/plain",
+        )
+
+        st.info("This app creates reminder drafts only. It does not send messages automatically.")
 
 with tab_all:
     st.subheader("Project table")
