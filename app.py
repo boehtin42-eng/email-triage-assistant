@@ -266,12 +266,18 @@ col1, col2 = st.columns(2)
 with col1:
     if st.button("Test Email"):
         ok, message = test_email_connection()
-        st.success(message) if ok else st.error(message)
+        if ok:
+            st.success(message)
+        else:
+            st.error(message)
 
 with col2:
     if st.button("Test Gemini"):
         ok, message = test_gemini_connection()
-        st.success(message) if ok else st.error(message)
+        if ok:
+            st.success(message)
+        else:
+            st.error(message)
 
 
 st.subheader("Unread Email Triage")
