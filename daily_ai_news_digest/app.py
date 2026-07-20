@@ -200,6 +200,70 @@ def action_hint(title: str, summary: str) -> str:
     return "Skim and decide if it is relevant to current business workflows."
 
 
+def short_information(title: str, summary: str) -> str:
+    text = clean_text(summary)
+    if text:
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        compact = " ".join(sentence for sentence in sentences[:2] if sentence).strip()
+        if compact:
+            return compact[:260]
+    return f"Quick update: {title}"
+
+
+def practical_tip(title: str, summary: str) -> str:
+    text = f"{title} {summary}".lower()
+    if is_openai_codex_news(title, summary):
+        return "Check whether this can improve how you write, research, build internal tools, or automate repetitive admin work."
+    if "agent" in text or "chatbot" in text:
+        return "Use this as an idea for customer replies, internal FAQ support, or lead follow-up automation."
+    if "automation" in text or "workflow" in text or "process" in text:
+        return "Look for one repeated manual task in the business and test a small automation around it."
+    if "sales" in text or "crm" in text or "marketing" in text:
+        return "Compare this with your current lead or customer follow-up process."
+    if "invoice" in text or "email" in text or "spreadsheet" in text:
+        return "Test whether this can reduce manual copy-paste, tracking, or reporting work."
+    return "Save this only if it connects to a current business process or tool decision."
+
+
+def exact_steps(title: str, summary: str) -> List[str]:
+    text = f"{title} {summary}".lower()
+    if is_openai_codex_news(title, summary):
+        return [
+            "Open the article or video and check what changed.",
+            "Write down one business task it could improve, for example email replies, reporting, research, or internal tools.",
+            "Test it with one small workflow before changing the main process.",
+        ]
+    if "agent" in text or "chatbot" in text:
+        return [
+            "Pick one repeated question customers or staff ask often.",
+            "Create a short FAQ or sample answers for that topic.",
+            "Test a draft-only chatbot first, then review answers before using it with real users.",
+        ]
+    if "automation" in text or "workflow" in text or "process" in text:
+        return [
+            "Choose one repetitive task that happens every week.",
+            "Map the trigger, input, action, and output.",
+            "Build a small Make.com, n8n, or Streamlit test before automating the full workflow.",
+        ]
+    if "sales" in text or "crm" in text or "marketing" in text:
+        return [
+            "Check if the idea helps collect leads, reply faster, or follow up better.",
+            "Test it with 5-10 sample leads or messages.",
+            "Keep the result only if it saves time or improves response quality.",
+        ]
+    if "invoice" in text or "email" in text or "spreadsheet" in text:
+        return [
+            "Compare the idea with the current manual admin process.",
+            "Test it using sample invoices, emails, or spreadsheet rows.",
+            "Use it only after checking that important data is not lost or changed incorrectly.",
+        ]
+    return [
+        "Skim the article title and short information.",
+        "Decide if it connects to a current business problem.",
+        "If yes, save it as an idea to test later.",
+    ]
+
+
 def why_it_matters(title: str, summary: str) -> str:
     text = f"{title} {summary}".lower()
     if is_openai_codex_news(title, summary):
@@ -257,6 +321,9 @@ def fetch_feed(source: str, feed_type: str, url: str, category: str) -> List[Dic
                 "priority_reason": priority_reason(title, summary),
                 "action_hint": action_hint(title, summary),
                 "why_it_matters": why_it_matters(title, summary),
+                "short_information": short_information(title, summary),
+                "practical_tip": practical_tip(title, summary),
+                "exact_steps": exact_steps(title, summary),
                 "link": link,
             }
         )
@@ -288,6 +355,9 @@ def fetch_all(feeds: List[Dict[str, str]]) -> pd.DataFrame:
                 "priority_reason",
                 "action_hint",
                 "why_it_matters",
+                "short_information",
+                "practical_tip",
+                "exact_steps",
                 "link",
             ]
         )
@@ -304,7 +374,9 @@ def apply_filters(
     filtered = dataframe.copy()
     if search:
         query = search.lower()
-        mask = filtered[["title", "summary", "action_hint", "source"]].astype(str).apply(
+        mask = filtered[
+            ["title", "summary", "action_hint", "short_information", "practical_tip", "source"]
+        ].astype(str).apply(
             lambda column: column.str.lower().str.contains(query, na=False)
         ).any(axis=1)
         filtered = filtered[mask]
@@ -356,7 +428,9 @@ if include_youtube_feeds:
 feeds.extend(source_rows_from_text(custom_sources))
 
 st.title("Daily Business AI News Digest")
-st.caption("Open the app and it prioritizes business AI, ChatGPT, OpenAI, Codex, and process optimization news.")
+st.caption(
+    "Open the app and get short business AI updates, practical tips, and exact next steps."
+)
 
 if not feeds:
     st.warning("Turn on at least one built-in source or add an optional RSS source to start.")
@@ -452,9 +526,12 @@ with tab_focus:
                     f"{row['date']} • {row['source']} • {row['priority_reason']} • "
                     f"{row['relevance']} relevance"
                 )
-                st.write(row["summary"])
+                st.write(row["short_information"])
                 st.success(f"Why it matters for small business: {row['why_it_matters']}")
-                st.info(row["action_hint"])
+                st.info(f"Tip: {row['practical_tip']}")
+                with st.expander("Exact steps to use this"):
+                    for index, step in enumerate(row["exact_steps"], start=1):
+                        st.write(f"{index}. {step}")
 
 with tab_all:
     st.subheader("All fetched items")
@@ -466,7 +543,8 @@ with tab_all:
         "title",
         "relevance",
         "score",
-        "action_hint",
+        "short_information",
+        "practical_tip",
         "why_it_matters",
         "link",
     ]
