@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import html
 import re
@@ -125,6 +125,14 @@ def parse_date(value: Optional[str]) -> Optional[datetime]:
         return parsedate_to_datetime(value)
     except Exception:
         return None
+
+
+def to_utc(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def clean_text(value: str) -> str:
@@ -304,12 +312,13 @@ def fetch_feed(source: str, feed_type: str, url: str, category: str) -> List[Dic
         title = clean_text(entry.get("title", ""))
         summary = clean_text(entry.get("summary", entry.get("description", "")))
         link = entry.get("link", "")
-        published = parse_date(entry.get("published") or entry.get("updated"))
+        published = to_utc(parse_date(entry.get("published") or entry.get("updated")))
         published_text = published.strftime("%Y-%m-%d") if published else ""
         score = score_relevance(title, summary)
         items.append(
             {
                 "date": published_text,
+                "published_at": published.isoformat() if published else "",
                 "source": source,
                 "type": feed_type,
                 "category": category,
@@ -344,6 +353,7 @@ def fetch_all(feeds: List[Dict[str, str]]) -> pd.DataFrame:
         dataframe = pd.DataFrame(
             columns=[
                 "date",
+                "published_at",
                 "source",
                 "type",
                 "category",
@@ -370,8 +380,15 @@ def apply_filters(
     relevance_filter: List[str],
     source_filter: List[str],
     topic_filter: str,
+    recent_only: bool,
+    recent_days: int,
 ) -> pd.DataFrame:
     filtered = dataframe.copy()
+    if recent_only and not filtered.empty:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=recent_days)
+        published_at = pd.to_datetime(filtered["published_at"], errors="coerce", utc=True)
+        filtered = filtered[published_at.notna() & (published_at >= cutoff)]
+
     if search:
         query = search.lower()
         mask = filtered[
@@ -390,7 +407,13 @@ def apply_filters(
     if topic_filter == "ChatGPT / OpenAI / Codex only":
         filtered = filtered[filtered["is_openai_codex"]]
 
-    return filtered.sort_values(["score", "date"], ascending=[False, False])
+    if filtered.empty:
+        return filtered
+
+    filtered = filtered.copy()
+    filtered["_published_sort"] = pd.to_datetime(filtered["published_at"], errors="coerce", utc=True)
+    filtered = filtered.sort_values(["_published_sort", "score"], ascending=[False, False])
+    return filtered.drop(columns=["_published_sort"])
 
 
 with st.sidebar:
@@ -417,6 +440,15 @@ with st.sidebar:
 
     st.header("Filters")
     search = st.text_input("Search", placeholder="ChatGPT, Codex, automation, agent...")
+    recent_only = st.checkbox("Recent updates only", value=True)
+    recent_days = st.number_input(
+        "Show news from last days",
+        min_value=1,
+        max_value=90,
+        value=30,
+        step=1,
+        disabled=not recent_only,
+    )
     relevance_filter = st.multiselect("Relevance", ["High", "Medium", "Low"], key="relevance_filter")
 
 
@@ -448,14 +480,25 @@ with st.sidebar:
     source_filter = st.multiselect("Source", source_options)
 
 topic_filter = st.session_state["topic_filter"]
-filtered_news = apply_filters(news, search, relevance_filter, source_filter, topic_filter)
+recent_news = apply_filters(news, "", [], [], "All", recent_only, int(recent_days))
+filtered_news = apply_filters(
+    news,
+    search,
+    relevance_filter,
+    source_filter,
+    topic_filter,
+    recent_only,
+    int(recent_days),
+)
 
 total_count = len(news)
-high_count = int((news["relevance"] == "High").sum())
-medium_count = int((news["relevance"] == "Medium").sum())
-openai_codex_count = int(news["is_openai_codex"].sum()) if "is_openai_codex" in news else 0
+recent_count = len(recent_news)
+high_count = int((recent_news["relevance"] == "High").sum())
+medium_count = int((recent_news["relevance"] == "Medium").sum())
+openai_codex_count = int(recent_news["is_openai_codex"].sum()) if "is_openai_codex" in recent_news else 0
 shown_count = len(filtered_news)
 active_relevance = ", ".join(relevance_filter) if relevance_filter else "All"
+recent_label = f"Last {int(recent_days)} days" if recent_only else "All dates"
 
 metric_cols = st.columns(6)
 with metric_cols[0]:
@@ -468,8 +511,8 @@ with metric_cols[0]:
         use_container_width=True,
     )
 with metric_cols[1]:
-    st.metric("Showing now", shown_count)
-    st.caption(f"{active_relevance} • {topic_filter}")
+    st.metric("Recent updates", recent_count)
+    st.caption(recent_label)
 with metric_cols[2]:
     st.metric("High relevance", high_count)
     st.button(
@@ -500,7 +543,10 @@ with metric_cols[4]:
 with metric_cols[5]:
     st.metric("Sources", len(source_options))
 
-st.info(f"Showing {shown_count} item(s). Relevance: {active_relevance}. Topic: {topic_filter}.")
+st.info(
+    f"Showing {shown_count} item(s). Date filter: {recent_label}. "
+    f"Relevance: {active_relevance}. Topic: {topic_filter}."
+)
 
 tab_focus, tab_all, tab_sources = st.tabs(["Priority digest", "All items", "Sources"])
 
@@ -537,6 +583,7 @@ with tab_all:
     st.subheader("All fetched items")
     display_columns = [
         "date",
+        "published_at",
         "source",
         "category",
         "priority_reason",
